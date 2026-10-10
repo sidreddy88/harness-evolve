@@ -11,7 +11,7 @@ agent twice.
 
 ## Results
 
-Used on a production code-diagnosis agent (agent-platform), on SWE-bench Verified with
+Used on a production code-diagnosis agent ([agent-platform](https://github.com/sidreddy88/agent-platform)), on SWE-bench Verified with
 DeepSeek-V4.1-Flash:
 
 ![Held-out accuracy and cost per task: original one run 78.8% at $0.033, original best of 2 runs 89.9% at $0.066, evolved one run 89.9% at $0.040](docs/results.png)
@@ -36,7 +36,8 @@ The example is a small math agent (a calculator tool and a submit tool) on GSM-H
 with large, awkward numbers, where how the agent uses its calculator matters.
 
 ```bash
-pip install "harness-evolve[litellm]"        # or: pip install -e ".[litellm]" from a clone
+git clone https://github.com/sidreddy88/harness-evolve && cd harness-evolve
+pip install -e ".[litellm]"
 python examples/math_agent/fetch_data.py      # downloads 80 problems
 export TOGETHER_API_KEY=...                   # or any litellm provider; set MODEL to match
 harness-evolve run examples/math_agent/config.py --run-dir runs/math-1 --budget 2
