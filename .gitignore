@@ -5,3 +5,4 @@ __pycache__/
 runs/
 dist/
 *.egg-info/
+examples/math_agent/data/
