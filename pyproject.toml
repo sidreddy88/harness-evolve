@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "harness-evolve"
+version = "0.1.0"
+description = "Evolve an agent's harness (prompts, tool descriptions, settings) from its own failure traces, accepting only changes that beat measured run-to-run noise."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Siddharth Sukumar" }]
+keywords = ["llm", "agents", "evals", "harness-engineering", "prompt-optimization"]
+dependencies = []
+
+[project.optional-dependencies]
+litellm = ["litellm>=1.40"]
+dev = ["pytest>=8"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harness_evolve"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

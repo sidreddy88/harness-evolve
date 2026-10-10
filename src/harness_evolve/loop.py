@@ -1,0 +1,857 @@
+"""
+The harness optimizer: a long-running agent that improves another agent's
+harness, one gated edit per round.
+
+    round 0   evaluate the starting harness on the evolve set (2 trials per
+              case), calibrate the noise band from trial pairs, set S*
+    round r   propose one edit (proposer, from trajectories + edit history)
+              -> validate structurally (free)
+              -> leakage critic (cheap; rejections go back for repair)
+              -> evaluate on the evolve set (the only expensive step)
+              -> decide with rules in code (acceptance.py)
+              -> record in the edit history; if accepted, the candidate
+                 becomes the incumbent and a proposal is published for
+                 human review (never applied to the repo automatically)
+    stop      max rounds, too many rounds without an acceptance, or the
+              budget can't cover the next evaluation
+    final     (optional) the original and the final harness on the held-out
+              cases, k trials each, and a report against the matched-budget
+              rerun baseline (report.py)
+
+Before round 0, an optional smoke stage replays a few cases once and checks
+they produced tool calls, verdicts and costs, so a broken setup costs ~$1,
+not a night.
+
+What makes it a long-running agent rather than a script:
+
+- **Checkpointed**: RunState is saved after every phase; `run()` on an existing
+  run directory resumes exactly where it stopped.
+- **Never pays twice**: each case's result is cached the moment it finishes,
+  keyed by the candidate's content hash, so a crash mid-evaluation costs at
+  most the case in flight.
+- **Memory**: the edit history (history.py) persists every judged candidate
+  and is compacted into what the proposer sees each round.
+- **Budget**: a hard cap (budget.py) is checked before every case, in code.
+- **Human in the loop, asynchronously**: accepted edits become proposals to
+  review; the run keeps going without waiting.
+- **Stops on provider failures** instead of scoring them, and can be resumed
+  once credits or keys are fixed.
+- **Tripwires** (health.py): every few finished cases, the recent trajectories
+  are checked for broken measurements (a tool failing far above normal, $0
+  costs, errored replays); a trip pauses the run resumably.
+- **Watchdog**: a heartbeat file every minute; no progress for
+  `stall_minutes` dumps every stack and exits (resumably). A stopped run's
+  process once sat hung for 18 hours; this is the fix.
+- **Measured timing**: sessions, phase durations and replay counts in the
+  state, so "how long did it run unattended" is read, not reconstructed.
+"""
+from __future__ import annotations
+
+import asyncio
+import faulthandler
+import hashlib
+import json
+import logging
+import os
+import shutil
+import time
+from collections import deque
+from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path
+from typing import Protocol
+
+from harness_evolve import candidates, critic, evidence, health, profiles, proposer, report
+from harness_evolve.acceptance import (
+    Decision,
+    AcceptanceConfig,
+    CaseResult,
+    EvalResult,
+    calibrate_cost_delta,
+    calibrate_delta,
+    decide,
+)
+from harness_evolve.budget import Budget, BudgetExceeded, estimate_eval_cost
+from harness_evolve.evaluator import Evaluator, ProviderFailure, UnpricedModel
+from harness_evolve.llm import reply_cost
+from harness_evolve.history import EditHistory, HistoryEntry
+from harness_evolve.state import RunDir, RunState
+
+logger = logging.getLogger(__name__)
+
+LLM = Callable[[str, str], Awaitable[str]]
+
+
+@dataclass
+class OptimizerConfig:
+    evolve_cases: list[str]
+    guard_cases: list[str]
+    budget_usd: float
+    trials: int = 1                    # per case, per candidate evaluation
+    calibration_trials: int = 2        # round 0; 2 gives the trial pairs for delta
+    max_rounds: int = 5
+    max_stall: int = 3                 # consecutive rounds without an acceptance
+    # Two-model acceptance: a candidate accepted on the primary model is re-run on
+    # these cases with a second model (the transfer evaluator) and vetoed if it
+    # resolves more than transfer_margin fewer than the incumbent there. The r9
+    # prompt edit helped DeepSeek and was neutral on Sonnet; retry transferred.
+    transfer_cases: list[str] = field(default_factory=list)
+    transfer_trials: int = 1
+    transfer_margin: int = 2
+    repair_attempts: int = 2           # proposer retries after invalid/critic-rejected
+    # Budget estimate per case per trial until one is measured; set it near
+    # your agent's real cost, with room for failing cases that use every turn.
+    default_case_cost_usd: float = 0.25
+    default_delta: float = 0.25        # used if calibration isn't possible
+    acceptance: dict = field(default_factory=dict)   # AcceptanceConfig overrides
+    # Parallelism. Cases in the same lane run one after another; lanes run
+    # concurrently, at most `parallel_lanes` at a time. Use lanes for cases that
+    # share a resource and must not run at once (in the first user of this
+    # loop, replays of the same git repo shared a clone; running two at once
+    # corrupted one, which changes agent behaviour, not just speed).
+    parallel_lanes: int = 1
+    case_lanes: dict = field(default_factory=dict)   # case id -> lane name
+    # Concurrent sub-lanes per lane (only if the shared resource allows it).
+    lane_width: int = 1
+    smoke_cases: list = field(default_factory=list)  # replayed once before round 0
+    final_cases: list = field(default_factory=list)  # held-out; empty = no final phase
+    final_trials: int = 3
+    health_every: int = 10             # finished cases between tripwire checks
+    health_window: int = 20            # most recent cases a check looks at
+    stall_minutes: float = 20.0        # watchdog: no progress this long -> exit
+    # Exploration (RRSI's component-novelty idea, simplified): once the last
+    # `diversity_after` candidates were all rejected, the next must edit a
+    # component family none of them touched. 0 = off. Added after the
+    # known-answer test (r7): the proposer edited prompt text every round and
+    # never touched settings, even with a retry setting targeting the exact
+    # failure its own evidence named.
+    diversity_after: int = 0
+    cost_band: bool = False            # calibrate and apply a cost noise band (acceptance.cost_delta)
+    health_baseline: dict = field(default_factory=dict)   # overrides health.BASELINE (other models)
+    # Round 0's pass-rate tripwire assumes round 0 measures the unchanged
+    # original harness. A regression gate that replays a changed harness through
+    # round 0, where a collapse is the result to report, not a broken run
+    # (the gate's known-answer regression tripped it). Tool, error and cost
+    # tripwires stay on either way.
+    pass_rate_tripwire: bool = True
+    # Proposer/critic calls whose cost is unknown are allowed (and count $0).
+    allow_unpriced_llm: bool = False
+
+    def to_json(self) -> dict:
+        return asdict(self)
+
+
+class Publisher(Protocol):
+    def publish(self, run: RunDir, round_no: int, candidate_dir: Path, diff: str,
+                decision: dict, hypothesis: str) -> Path: ...
+
+
+class LocalPublisher:
+    """Writes an accepted edit as a reviewable proposal under run_dir/proposals/.
+    Opening the PR is a separate, human-approved step."""
+
+    def publish(self, run: RunDir, round_no: int, candidate_dir: Path, diff: str,
+                decision: dict, hypothesis: str) -> Path:
+        out = run.root / "proposals" / f"r{round_no}"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "harness.diff").write_text(diff)
+        (out / "decision.json").write_text(json.dumps(decision, indent=1))
+        (out / "README.md").write_text(
+            f"# Proposed harness edit, round {round_no}\n\n**Hypothesis:** {hypothesis}\n\n"
+            f"**Decision:** {decision['reason']}\n\n"
+            f"Improved: {decision['improved'] or '-'}  \nRegressed: {decision['regressed'] or '-'}\n\n"
+            f"Apply `harness.diff` to the {profiles.active().name} harness directory "
+            f"({profiles.active().harness_root}) through your normal review process.\n")
+        return out
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _cases_key(cases: list[str]) -> str:
+    return hashlib.sha256("\n".join(sorted(cases)).encode()).hexdigest()[:10]
+
+
+class Optimizer:
+    def __init__(self, run_dir: str | Path, base_harness: str | Path, cfg: OptimizerConfig,
+                 evaluator: Evaluator, proposer_llm: LLM, critic_llm: LLM,
+                 critic_patterns: list[tuple[str, str]], publisher: Publisher | None = None,
+                 transfer_evaluator: Evaluator | None = None):
+        self.run = RunDir(run_dir)
+        self.base = Path(base_harness)
+        self.cfg = cfg
+        self.evaluator = evaluator
+        if hasattr(evaluator, "on_trial"):
+            evaluator.on_trial = self._touch
+        self.proposer_llm = proposer_llm
+        self.critic_llm = critic_llm
+        self.patterns = critic_patterns
+        self.publisher = publisher or LocalPublisher()
+        self.transfer_evaluator = transfer_evaluator
+        self.history = EditHistory(self.run.root / "history.jsonl")
+
+    # ---- lifecycle ----------------------------------------------------------
+
+    def _init_state(self) -> RunState:
+        self.run.root.mkdir(parents=True, exist_ok=True)
+        if self.run.incumbent_dir.exists():
+            shutil.rmtree(self.run.incumbent_dir)
+        shutil.copytree(self.base, self.run.incumbent_dir)
+        if self.run.original_dir.exists():
+            shutil.rmtree(self.run.original_dir)
+        shutil.copytree(self.base, self.run.original_dir)
+        state = RunState(run_id=self.run.root.name, config=self.cfg.to_json(),
+                         phase="smoke" if self.cfg.smoke_cases else "evaluate")
+        self.run.save(state)
+        return state
+
+    async def run_until_stopped(self) -> RunState:
+        state = self.run.load() if self.run.exists() else self._init_state()
+        if state.phase != "done":
+            state.stop_reason = None     # resuming: the last stop (e.g. a provider failure) is over
+        budget = Budget(self.cfg.budget_usd, spent_usd=state.spent_usd)
+        self._state = state
+        self._last_progress = time.monotonic()
+        self._begin_session(state)
+        watchdog = asyncio.get_running_loop().create_task(self._watchdog(state))
+        try:
+            while state.phase != "done":
+                t0, label = time.monotonic(), f"r{state.round}:{state.phase}"
+                started = _now()
+                await self._step(state, budget)
+                state.timing.setdefault("phases", []).append(
+                    {"phase": label, "start": started, "seconds": round(time.monotonic() - t0, 1)})
+                self._progress(state)
+                self.run.save(state)
+        except health.Tripwire as exc:
+            # A pause, like a provider failure: the phase is kept.
+            state.stop_reason = f"tripwire, check the run then resume: {exc}"
+        except BudgetExceeded as exc:
+            # Not done either: the phase is kept, so raising the cap (--budget
+            # on resume) continues from here, with finished cases from the cache.
+            state.stop_reason = f"budget: {exc}"
+        except ProviderFailure as exc:
+            # Not done: the phase is kept, so a resume continues from here once
+            # the provider problem (credits, keys) is fixed.
+            state.stop_reason = f"provider failure, resume after fixing: {exc}"
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            # Ctrl-C / SIGINT: record the session's end, keep the phase, re-raise.
+            state.stop_reason = "interrupted by operator; resume to continue"
+            state.spent_usd = budget.spent_usd
+            self._end_session(state)
+            self.run.save(state)
+            raise
+        finally:
+            watchdog.cancel()
+        state.spent_usd = budget.spent_usd
+        self._end_session(state)
+        self.run.save(state)
+        return state
+
+    # ---- timing, heartbeat, watchdog ------------------------------------------
+
+    def _begin_session(self, state: RunState) -> None:
+        t = state.timing
+        t.setdefault("started_at", _now())
+        t.setdefault("sessions", []).append({"start": _now(), "pid": os.getpid(), "replays": 0,
+                                             "start_round": state.round, "start_phase": state.phase})
+        self._session_t0 = time.monotonic()
+
+    def _end_session(self, state: RunState) -> None:
+        sess = state.timing["sessions"][-1]
+        sess["end"] = _now()
+        sess["seconds"] = round(time.monotonic() - self._session_t0, 1)
+        sess["ended_because"] = state.stop_reason or ("done" if state.phase == "done" else "interrupted")
+        if state.phase == "done":
+            state.timing["finished_at"] = sess["end"]
+        state.timing["active_seconds"] = round(sum(s.get("seconds", 0) for s in state.timing["sessions"]), 1)
+
+    def _touch(self) -> None:
+        """Liveness only: a trial finished. Keeps the watchdog quiet during long
+        cases without touching session accounting (that's _progress, per case)."""
+        self._last_progress = time.monotonic()
+        self._trials_finished = getattr(self, "_trials_finished", 0) + 1
+
+    def _progress(self, state: RunState) -> None:
+        self._last_progress = time.monotonic()
+        sess = state.timing["sessions"][-1]
+        sess["last_seen"] = _now()
+        sess["seconds"] = round(time.monotonic() - self._session_t0, 1)
+
+    def _heartbeat(self, state: RunState) -> None:
+        idle = time.monotonic() - self._last_progress
+        data = {"time": _now(), "pid": os.getpid(), "round": state.round, "phase": state.phase,
+                "spent_usd": round(state.spent_usd, 4), "seconds_since_progress": round(idle, 1),
+                "session_seconds": round(time.monotonic() - self._session_t0, 1),
+                # trials finished this session (counted as each one ends, so a dashboard can
+                # show movement inside a batched chunk before its results are saved)
+                "trials_finished_this_session": getattr(self, "_trials_finished", 0)}
+        (self.run.root / "heartbeat.json").write_text(json.dumps(data))
+
+    async def _watchdog(self, state: RunState, interval: float = 60.0) -> None:
+        while True:
+            await asyncio.sleep(interval)
+            self._heartbeat(state)
+            idle = time.monotonic() - self._last_progress
+            if idle > self.cfg.stall_minutes * 60:
+                self._die_stalled(state, idle)
+
+    def _die_stalled(self, state: RunState, idle: float) -> None:
+        """No progress for stall_minutes: record why, dump every stack, and
+        exit hard. A hang may hold threads or subprocess pipes that a normal
+        shutdown would wait on forever, which is how r3's process sat for 18h."""
+        path = self.run.root / f"watchdog-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.txt"
+        with path.open("w") as f:
+            f.write(f"no progress for {idle / 60:.1f} min at round {state.round} {state.phase}\n\n")
+            faulthandler.dump_traceback(file=f, all_threads=True)
+            f.write("\nasyncio tasks:\n")
+            for task in asyncio.all_tasks():
+                f.write(f"\n{task!r}\n")
+                for frame in task.get_stack(limit=12):
+                    f.write(f"  {frame.f_code.co_filename}:{frame.f_lineno} {frame.f_code.co_name}\n")
+        state.stop_reason = f"watchdog: no progress for {idle / 60:.0f} min, stacks in {path.name}; resume to continue"
+        self._end_session(state)
+        self.run.save(state)
+        os._exit(3)
+
+    async def _step(self, state: RunState, budget: Budget) -> None:
+        if state.phase == "smoke":
+            await self._smoke(state, budget)
+        elif state.phase == "final":
+            await self._final(state, budget)
+        elif state.round == 0:
+            await self._round0(state, budget)
+        elif state.phase == "propose":
+            await self._propose(state, budget)
+        elif state.phase == "screen":
+            await self._screen(state, budget)
+        elif state.phase == "evaluate":
+            await self._evaluate_candidate(state, budget)
+        elif state.phase == "decide":
+            self._decide(state)
+        elif state.phase == "transfer":
+            await self._transfer(state, budget)
+        else:
+            raise RuntimeError(f"unknown phase {state.phase!r}")
+
+    def _end_round(self, state: RunState, accepted: bool) -> None:
+        state.stalled_rounds = 0 if accepted else state.stalled_rounds + 1
+        state.candidate = None
+        state.round += 1
+        why = None
+        if state.round > self.cfg.max_rounds:
+            why = f"completed {self.cfg.max_rounds} rounds"
+        elif state.stalled_rounds >= self.cfg.max_stall:
+            why = f"{state.stalled_rounds} consecutive rounds without an acceptance"
+        if why is None:
+            state.phase = "propose"
+        elif self.cfg.final_cases:
+            state.phase, state.rounds_stop_reason = "final", why
+        else:
+            state.phase, state.stop_reason = "done", why
+
+    # ---- evaluation, cached per case ----------------------------------------
+
+    def _case_key(self, harness_dir: Path, trials: int, case: str) -> str:
+        return f"{candidates.content_hash(harness_dir)}/k{trials}/{case}"
+
+    def _per_case_estimate(self) -> float:
+        """Mean measured cost of one trial of one case so far, for budget reservations.
+        Read from disk once, then kept as running sums: rescanning every
+        cached case before every case was quadratic, fine at 50 cases but not
+        at the final phase's 400."""
+        if getattr(self, "_cost_stats", None) is None:
+            costs = []
+            for p in sorted((self.run.root / "evals").rglob("*.json")):
+                case = json.loads(p.read_text())["case"]
+                if case["trials"]:
+                    costs.append(case["cost_usd"] / case["trials"])
+            self._cost_stats = [sum(costs), len(costs)]
+        total, n = self._cost_stats
+        return total / n if n else self.cfg.default_case_cost_usd
+
+    async def _llm_call(self, llm: LLM, budget: Budget, state: RunState, system: str, prompt: str) -> str:
+        """Proposer/critic calls count against the same budget as evaluations.
+        The LLM reports its cost on the reply (llm.LLMReply); a reply with no
+        known cost stops the run unless the config allows unpriced calls."""
+        reply = await llm(system, prompt)
+        cost = reply_cost(reply)
+        if cost is None and not self.cfg.allow_unpriced_llm:
+            raise UnpricedModel("a proposer/critic call returned no cost: return llm.LLMReply(text, cost_usd) "
+                                "or set allow_unpriced_llm=True")
+        budget.record(cost or 0.0)
+        state.spent_usd = budget.spent_usd
+        return str(reply)
+
+    async def _evaluate(self, state: RunState, budget: Budget, harness_dir: Path,
+                        cases: list[str], trials: int, round0: bool = False) -> tuple[EvalResult, list[dict]]:
+        todo = [c for c in cases if self.run.load_eval(self._case_key(harness_dir, trials, c)) is None]
+        batch = int(getattr(self.evaluator, "batch_size", 1) or 1)
+        if batch > 1 and todo:
+            # Batched evaluators (the fix evaluator grades a whole batch in one Modal run
+            # per trial) get cases in chunks; results are still cached per case, so resume,
+            # budget and tripwires behave as in the per-case path. Lanes don't apply: the
+            # evaluator runs a chunk's cases concurrently itself.
+            self._recent = deque(maxlen=max(1, self.cfg.health_window))
+            self._since_check = 0
+            self._health_round0 = round0 and self.cfg.pass_rate_tripwire
+            for i in range(0, len(todo), batch):
+                await self._evaluate_chunk(state, budget, harness_dir, todo[i:i + batch], trials)
+            todo = []                      # all cached now; assembled below
+        by_repo: dict[str, list[str]] = {}
+        for case in todo:
+            by_repo.setdefault(self.cfg.case_lanes.get(case, "_default"), []).append(case)
+        # Each repo lane splits into up to lane_width sub-lanes, round-robin.
+        lanes: dict[str, list[str]] = {}
+        width = max(1, self.cfg.lane_width)
+        for repo, repo_cases in by_repo.items():
+            for i, case in enumerate(repo_cases):
+                lanes.setdefault(f"{repo}#{i % width}", []).append(case)
+        self._recent = deque(maxlen=max(1, self.cfg.health_window))
+        self._since_check = 0
+        self._health_round0 = round0 and self.cfg.pass_rate_tripwire
+        gate = asyncio.Semaphore(max(1, self.cfg.parallel_lanes))
+
+        async def run_lane(lane_cases: list[str]) -> None:
+            async with gate:
+                for case in lane_cases:
+                    await self._evaluate_case(state, budget, harness_dir, case, trials)
+
+        if len(lanes) <= 1 or self.cfg.parallel_lanes <= 1:
+            for lane_cases in lanes.values():
+                await run_lane(lane_cases)
+        else:
+            # TaskGroup: the first lane to fail (budget, provider failure, crash)
+            # cancels the others, so nothing keeps spending after a stop.
+            try:
+                async with asyncio.TaskGroup() as tg:
+                    for lane_cases in lanes.values():
+                        tg.create_task(run_lane(lane_cases))
+            except BaseExceptionGroup as group:
+                # Surface one real cause, so run_until_stopped's budget and
+                # provider-failure handling sees it; prefer those over others.
+                excs = list(group.exceptions)
+                for kind in (health.Tripwire, BudgetExceeded, ProviderFailure):
+                    for exc in excs:
+                        if isinstance(exc, kind):
+                            raise exc from None
+                raise excs[0] from None
+
+        per_case: dict[str, CaseResult] = {}
+        trajectories: list[dict] = []
+        for case in cases:
+            cached = self.run.load_eval(self._case_key(harness_dir, trials, case))
+            per_case[case] = CaseResult(**cached["case"])
+            trajectories.extend(cached["trajectories"])
+        return EvalResult(per_case), trajectories
+
+    def _record_health(self, state: RunState, case: str, record: dict) -> None:
+        """Keep the recent finished cases; every health_every of them, run the
+        tripwires (health.py) and raise Tripwire if the measurements look broken."""
+        recent = getattr(self, "_recent", None)
+        if recent is None:
+            return
+        recent.append((case, record))
+        self._since_check += 1
+        if self._since_check < self.cfg.health_every:
+            return
+        self._since_check = 0
+        guards = set(self.cfg.guard_cases)
+        w = health.Window([], [], [], [])
+        for c, rec in recent:
+            cr = rec["case"]
+            w.trajectories.extend(rec["trajectories"])
+            w.verdicts.extend(cr["verdicts"])
+            if cr["trials"]:
+                w.costs.extend([cr["cost_usd"] / cr["trials"]] * cr["trials"])
+            if c in guards:
+                w.guard_verdicts.extend(cr["verdicts"])
+        baseline = {**profiles.active().health_baseline, **self.cfg.health_baseline}
+        problems = health.check(w, round0=self._health_round0, baseline=baseline)
+        h = state.health
+        h["checks"] = h.get("checks", 0) + 1
+        h["last_check"] = {"time": _now(), "round": state.round, "phase": state.phase,
+                           "cases": len(recent), "problems": problems}
+        if problems:
+            h.setdefault("trips", []).append(h["last_check"])
+            self.run.save(state)
+            raise health.Tripwire("; ".join(problems))
+
+    async def _reserve(self, budget: Budget, estimate: float, what: str) -> float:
+        """Reserve budget for one case, waiting for lanes in flight rather than
+        stopping the run. A reservation that fails only because other lanes are
+        holding theirs is backpressure; once nothing is in flight, a failure
+        means the cap really can't cover the next case, and BudgetExceeded stops
+        the run. (The first version raised immediately: with 8 lanes each
+        holding an estimate, the 8th lane stopped the whole run at $0 spent.)"""
+        if getattr(self, "_released", None) is None:
+            self._released = asyncio.Condition()
+        async with self._released:
+            while True:
+                try:
+                    return budget.reserve(estimate, what)
+                except BudgetExceeded:
+                    if budget.reserved_usd <= 0:
+                        raise
+                    await self._released.wait()
+
+    def _notify_released(self) -> None:
+        cond = getattr(self, "_released", None)
+        if cond is None:
+            return
+
+        async def notify():
+            async with cond:
+                cond.notify_all()
+
+        asyncio.get_running_loop().create_task(notify())
+
+    async def _evaluate_case(self, state: RunState, budget: Budget, harness_dir: Path,
+                             case: str, trials: int) -> None:
+        key = self._case_key(harness_dir, trials, case)
+        held = await self._reserve(budget, self._per_case_estimate() * trials,
+                                   f"round {state.round}: {case} x{trials}")
+        try:
+            outcome = await self.evaluator.evaluate(harness_dir, [case], trials)
+        except ProviderFailure as exc:
+            budget.release(held, exc.cost_usd)
+            self._notify_released()
+            state.spent_usd = budget.spent_usd
+            raise
+        except BaseException:
+            budget.release(held, 0.0)
+            self._notify_released()
+            raise
+        budget.release(held, outcome.cost_usd)
+        self._notify_released()
+        state.spent_usd = budget.spent_usd
+        record = {"case": asdict(outcome.result.per_case[case]), "trajectories": outcome.trajectories}
+        self.run.save_eval(key, record)
+        stats = getattr(self, "_cost_stats", None)
+        if stats is not None and record["case"]["trials"]:
+            stats[0] += record["case"]["cost_usd"] / record["case"]["trials"]
+            stats[1] += 1
+        sess = state.timing.get("sessions")
+        if sess:
+            sess[-1]["replays"] = sess[-1].get("replays", 0) + record["case"]["trials"]
+        self._progress(state)
+        self.run.save(state)
+        self._record_health(state, case, record)
+
+    async def _evaluate_chunk(self, state: RunState, budget: Budget, harness_dir: Path,
+                              chunk: list[str], trials: int) -> None:
+        held = await self._reserve(budget, self._per_case_estimate() * trials * len(chunk),
+                                   f"round {state.round}: {len(chunk)} cases x{trials}")
+        try:
+            outcome = await self.evaluator.evaluate(harness_dir, chunk, trials)
+        except ProviderFailure as exc:
+            budget.release(held, exc.cost_usd)
+            self._notify_released()
+            state.spent_usd = budget.spent_usd
+            raise
+        except BaseException:
+            budget.release(held, 0.0)
+            self._notify_released()
+            raise
+        budget.release(held, outcome.cost_usd)
+        self._notify_released()
+        state.spent_usd = budget.spent_usd
+        stats = getattr(self, "_cost_stats", None)
+        records = []
+        for case in chunk:
+            record = {"case": asdict(outcome.result.per_case[case]),
+                      "trajectories": [t for t in outcome.trajectories if t.get("instance_id") == case]}
+            self.run.save_eval(self._case_key(harness_dir, trials, case), record)
+            records.append((case, record))
+            if stats is not None and record["case"]["trials"]:
+                stats[0] += record["case"]["cost_usd"] / record["case"]["trials"]
+                stats[1] += 1
+            sess = state.timing.get("sessions")
+            if sess:
+                sess[-1]["replays"] = sess[-1].get("replays", 0) + record["case"]["trials"]
+        self._progress(state)
+        self.run.save(state)
+        # Tripwires only after the whole chunk is saved: fix-r1's first chunk tripped after
+        # 10 of 25 cases and lost the other 15, already paid for.
+        for case, record in records:
+            self._record_health(state, case, record)
+
+    def _eval_ref(self, harness_dir: Path, trials: int) -> dict:
+        return {"hash": candidates.content_hash(harness_dir), "trials": trials,
+                "cases": self.cfg.evolve_cases + self.cfg.guard_cases}
+
+    def _load_ref(self, ref: dict) -> tuple[EvalResult, list[dict]]:
+        per_case, trajs = {}, []
+        for case in ref["cases"]:
+            data = self.run.load_eval(f"{ref['hash']}/k{ref['trials']}/{case}")
+            per_case[case] = CaseResult(**data["case"])
+            trajs.extend(data["trajectories"])
+        return EvalResult(per_case), trajs
+
+    # ---- phases ---------------------------------------------------------------
+
+    async def _round0(self, state: RunState, budget: Budget) -> None:
+        cases = self.cfg.evolve_cases + self.cfg.guard_cases
+        k = self.cfg.calibration_trials
+        result, trajs = await self._evaluate(state, budget, self.run.incumbent_dir, cases, k, round0=True)
+        pairs = {c: (r.verdicts[0] == "PASS", r.verdicts[1] == "PASS")
+                 for c, r in result.per_case.items() if len(r.verdicts) >= 2}
+        state.delta = (calibrate_delta(pairs, trials_per_eval=self.cfg.trials)
+                       if len(pairs) >= 2 else self.cfg.default_delta)
+        # The escalation guard gets its own noise band, from the same trial
+        # pairs: did each trial ever reach an accepted final answer (grader)? A
+        # fixed 5pp was 2 trials in 34 on rounds 1-2, close to pure noise.
+        grader = profiles.active().grader
+        state.delta_esc = None
+        if grader is not None:
+            never: dict[str, dict[int, bool]] = {}
+            for t in trajs:
+                never.setdefault(t["instance_id"], {})[t.get("trial")] = not grader.grade(t).accepted
+            esc_pairs = {c: (tr[1], tr[2]) for c, tr in never.items() if 1 in tr and 2 in tr}
+            state.delta_esc = (calibrate_delta(esc_pairs, trials_per_eval=self.cfg.trials)
+                               if len(esc_pairs) >= 2 else None)
+        if self.cfg.cost_band:
+            costs: dict[str, dict[int, float]] = {}
+            for t in trajs:
+                costs.setdefault(t["instance_id"], {})[t.get("trial")] = (t.get("cost") or {}).get("cost_usd") or 0.0
+            cost_pairs = {c: (tr[1], tr[2]) for c, tr in costs.items() if 1 in tr and 2 in tr}
+            state.delta_cost = (calibrate_cost_delta(cost_pairs, trials_per_eval=self.cfg.trials)
+                                if len(cost_pairs) >= 2 else None)
+        state.S_star = result.S
+        state.incumbent_eval = json.dumps(self._eval_ref(self.run.incumbent_dir, k))
+        logger.info("round 0: S=%.3f C=$%.3f delta=%.3f", result.S, result.C, state.delta)
+        state.round, state.phase = 1, "propose"
+        if self.cfg.max_rounds < 1:          # baseline only: measure, propose nothing
+            state.phase, state.stop_reason = "done", "round 0 only (baseline and calibration)"
+
+    async def _smoke(self, state: RunState, budget: Budget) -> None:
+        """A few cases, one trial each, before any real spend: every replay must
+        have made tool calls, reached a verdict and cost money, and the tools
+        must not be failing wholesale. Failing it pauses the run for ~$1."""
+        cases = list(self.cfg.smoke_cases)
+        result, trajs = await self._evaluate(state, budget, self.run.incumbent_dir, cases, 1)
+        verdicts = [v for r in result.per_case.values() for v in r.verdicts]
+        costs = [r.cost_usd / r.trials for r in result.per_case.values() if r.trials]
+        problems = health.smoke_problems(trajs, verdicts, costs,
+                                         {**profiles.active().health_baseline, **self.cfg.health_baseline})
+        state.health["smoke"] = {"time": _now(), "cases": cases, "verdicts": verdicts,
+                                 "cost_usd": round(sum(costs), 4), "problems": problems}
+        if problems:
+            raise health.Tripwire("smoke stage: " + "; ".join(problems))
+        state.phase = "evaluate"
+
+    async def _final(self, state: RunState, budget: Budget) -> None:
+        """The original and the final harness on the held-out cases, k trials
+        each, then the report. If nothing was accepted the two are the same
+        bytes, so the content-hash cache runs the original once."""
+        cases, k = list(self.cfg.final_cases), self.cfg.final_trials
+        orig, _ = await self._evaluate(state, budget, self.run.original_dir, cases, k)
+        same = candidates.content_hash(self.run.original_dir) == candidates.content_hash(self.run.incumbent_dir)
+        evolved = None
+        if not same:
+            evolved, _ = await self._evaluate(state, budget, self.run.incumbent_dir, cases, k)
+        meta = {"run_id": state.run_id, "heldout_cases": len(cases), "trials": k,
+                "accepted": state.accepted, "rounds_stop_reason": state.rounds_stop_reason,
+                "original_hash": candidates.content_hash(self.run.original_dir),
+                "evolved_hash": candidates.content_hash(self.run.incumbent_dir),
+                "spent_usd": round(state.spent_usd, 2)}
+        rep_ = report.build(orig.per_case, evolved.per_case if evolved else None, k, meta)
+        report.write(self.run.root / "report", rep_)
+        state.phase = "done"
+        state.stop_reason = f"{state.rounds_stop_reason}; held-out report written ({rep_['verdict'][:160]})"
+
+    async def _propose(self, state: RunState, budget: Budget) -> None:
+        inc_result, inc_traj = self._load_ref(json.loads(state.incumbent_eval))
+        cand = state.candidate or {"id": f"r{state.round}", "repairs": 0, "feedback": ""}
+        cand_dir = self.run.candidate_dir(state.round)
+        allowed = self._allowed_components()
+        if allowed:
+            cand["allowed_components"] = list(allowed)
+        try:
+            options = await proposer.propose_all(
+                self.run.incumbent_dir, evidence.build(inc_result, inc_traj),
+                self.history.summary(),
+                lambda sys_, prompt: self._llm_call(self.proposer_llm, budget, state, sys_, prompt),
+                cand.get("feedback", ""), allowed, self._run_context(state))
+            prop, files = self._first_valid(options, cand_dir)
+        except candidates.InvalidCandidate as exc:
+            if cand["repairs"] < self.cfg.repair_attempts:
+                cand["repairs"] += 1
+                cand["feedback"] = f"Invalid edit: {exc}"
+                state.candidate = cand
+                return                                   # retry propose
+            self.history.append(HistoryEntry(state.round, cand["id"], "unknown", "", "",
+                                             "invalid", str(exc)))
+            self._end_round(state, accepted=False)
+            return
+        cand.update({"component": prop.component, "hypothesis": prop.hypothesis,
+                     "dir": str(cand_dir), "hash": candidates.content_hash(cand_dir)})
+        # The proposer's second candidate, kept as a fallback if the critic
+        # rejects the preferred one (RRSI proposes two candidates per round).
+        rest = [(p_, f_) for p_, f_ in options if p_ is not prop]
+        cand["alternate"] = ({"component": rest[0][0].component, "hypothesis": rest[0][0].hypothesis,
+                              "files": rest[0][1]} if rest else None)
+        state.candidate = cand
+        state.phase = "screen"
+
+    def _first_valid(self, options, cand_dir: Path):
+        """Materialise the first option that validates; InvalidCandidate if none."""
+        errors = []
+        for prop, files in options:
+            try:
+                candidates.apply_edit(self.run.incumbent_dir, cand_dir, files)
+                candidates.validate(self.run.incumbent_dir, cand_dir)
+                return prop, files
+            except candidates.InvalidCandidate as exc:
+                errors.append(f"{prop.component}: {exc}")
+        raise candidates.InvalidCandidate("; ".join(errors))
+
+    def _near_misses(self) -> list[str]:
+        """In-band gains that weren't proven: worth building on or combining."""
+        return [f"[{e.component}] {e.hypothesis[:220]} (dS {e.delta_S:+.3f}, dC {e.delta_C:+.1%})"
+                for e in self.history.entries() if e.outcome == "near_miss"][-6:]
+
+    def _rejected_ideas(self) -> list[str]:
+        out = []
+        for e in self.history.entries():
+            if e.outcome in ("accepted", "near_miss"):
+                continue
+            meas = f", dS {e.delta_S:+.3f} dC {e.delta_C:+.1%}" if e.delta_S is not None else ""
+            out.append(f"[{e.component}] {e.hypothesis[:220]} -> {e.outcome}{meas}")
+        return out[-12:]
+
+    def _run_context(self, state: RunState) -> dict:
+        band = f"{state.delta:.3f}" if state.delta is not None else "not calibrated"
+        cost = (f"{state.delta_cost:.1%}" if (self.cfg.cost_band and state.delta_cost) else "0 (any saving)")
+        return {
+            "acceptance": (f"Evolve set: {len(self.cfg.evolve_cases)} cases + {len(self.cfg.guard_cases)} guards, "
+                           f"{self.cfg.trials} trial(s) each. Best pass rate so far S* = "
+                           f"{(state.S_star or 0):.3f}. Noise band on pass rate: {band}. A candidate whose pass "
+                           f"rate rises by more than the band is accepted even if it costs more (within a "
+                           f"budget that grows with the gain). Inside the band it must be cheaper by more "
+                           f"than cost noise: {cost}. Vetoed if the no-answer (escalation) rate rises."),
+            "rejected": self._rejected_ideas(),
+            "near_misses": self._near_misses(),
+        }
+
+    def _allowed_components(self) -> tuple[str, ...] | None:
+        """Exploration rule: if this run's last `diversity_after` judged
+        candidates were all rejected, only component families none of them
+        touched are allowed. Pilot notes (seeded history) don't count."""
+        n = self.cfg.diversity_after
+        if n <= 0:
+            return None
+        mine = [e for e in self.history.entries() if not e.outcome.startswith("pilot_")]
+        recent = mine[-n:]
+        if len(recent) < n or any(e.outcome == "accepted" for e in recent):
+            return None
+        families = profiles.active().component_families
+        tried = {families.get(e.component) for e in recent}
+        allowed = tuple(c for c, fam in families.items() if fam not in tried)
+        return allowed or None
+
+    async def _screen(self, state: RunState, budget: Budget) -> None:
+        cand = state.candidate
+        diff = candidates.diff(self.run.incumbent_dir, Path(cand["dir"]))
+        tools_file = self.run.incumbent_dir / "tool_descriptions.json"
+        rev = await critic.review(
+            diff, cand["component"], cand["hypothesis"],
+            lambda sys_, prompt: self._llm_call(self.critic_llm, budget, state, sys_, prompt),
+            self.patterns, rejected=self._rejected_ideas(),
+            tool_descriptions=tools_file.read_text() if tools_file.exists() else "")
+        if rev.accept:
+            state.phase = "evaluate"
+            return
+        objections = "; ".join(rev.reasons)
+        alt = cand.get("alternate")
+        if alt:
+            # Screen the proposer's second candidate before spending a repair.
+            cand.setdefault("screened_out", []).append(
+                {"component": cand["component"], "hypothesis": cand["hypothesis"], "reasons": rev.reasons})
+            cand["alternate"] = None
+            try:
+                cand_dir = Path(cand["dir"])
+                candidates.apply_edit(self.run.incumbent_dir, cand_dir, alt["files"])
+                candidates.validate(self.run.incumbent_dir, cand_dir)
+                cand.update({"component": alt["component"], "hypothesis": alt["hypothesis"],
+                             "hash": candidates.content_hash(cand_dir)})
+                return                                   # stay in screen, review the alternate
+            except candidates.InvalidCandidate:
+                pass
+        if cand["repairs"] < self.cfg.repair_attempts:
+            cand["repairs"] += 1
+            cand["feedback"] = f"The leakage critic rejected it: {objections}"
+            state.phase = "propose"
+            return
+        self.history.append(HistoryEntry(state.round, cand["id"], cand["component"],
+                                         cand["hypothesis"], diff, "critic_rejected", objections))
+        self._end_round(state, accepted=False)
+
+    async def _evaluate_candidate(self, state: RunState, budget: Budget) -> None:
+        cand = state.candidate
+        await self._evaluate(state, budget, Path(cand["dir"]),
+                             self.cfg.evolve_cases + self.cfg.guard_cases, self.cfg.trials)
+        cand["eval"] = json.dumps(self._eval_ref(Path(cand["dir"]), self.cfg.trials))
+        state.phase = "decide"
+
+    def _decide(self, state: RunState) -> None:
+        cand = state.candidate
+        inc_result, _ = self._load_ref(json.loads(state.incumbent_eval))
+        cand_result, _ = self._load_ref(json.loads(cand["eval"]))
+        base = AcceptanceConfig(**self.cfg.acceptance)
+        acfg = replace(base, delta=state.delta, guard_cases=tuple(self.cfg.guard_cases),
+                       max_escalation_rise=max(base.max_escalation_rise, state.delta_esc or 0.0),
+                       cost_delta=(state.delta_cost or 0.0) if self.cfg.cost_band else 0.0)
+        d = decide(inc_result, cand_result, state.S_star, acfg)
+        if d.accept and self.transfer_evaluator is not None and self.cfg.transfer_cases:
+            cand["decision"] = d.to_json()          # resumable: the transfer phase finishes it
+            state.phase = "transfer"
+            return
+        self._finish_decision(state, d)
+
+    async def _transfer(self, state: RunState, budget: Budget) -> None:
+        """Second-model check for a candidate the primary model accepted."""
+        cand = state.candidate
+        d = Decision(**cand["decision"])
+        cases, trials = list(self.cfg.transfer_cases), self.cfg.transfer_trials
+        passes = {}
+        for label, harness in (("incumbent", self.run.incumbent_dir), ("candidate", Path(cand["dir"]))):
+            held = budget.reserve(estimate_eval_cost(len(cases), trials, 0.10), f"transfer check ({label})")
+            out = await self.transfer_evaluator.evaluate(harness, cases, trials)
+            budget.release(held, out.cost_usd)
+            state.spent_usd = budget.spent_usd
+            passes[label] = sum(cr.passes for cr in out.result.per_case.values())
+        drop = passes["incumbent"] - passes["candidate"]
+        note = (f"second model: candidate {passes['candidate']} vs incumbent {passes['incumbent']} "
+                f"resolved on {len(cases)} cases x {trials}")
+        if drop > self.cfg.transfer_margin:
+            d.accept = False
+            d.vetoes.append(f"{note} (drop {drop} > margin {self.cfg.transfer_margin})")
+            d.reason = "vetoed by the second-model check: " + d.vetoes[-1] + "; primary: " + d.reason
+        else:
+            d.reason += f"; {note}, within margin {self.cfg.transfer_margin}"
+        self._finish_decision(state, d)
+
+    def _finish_decision(self, state: RunState, d: Decision) -> None:
+        cand = state.candidate
+        cand_result, _ = self._load_ref(json.loads(cand["eval"]))
+        cand_dir = Path(cand["dir"])
+        diff = candidates.diff(self.run.incumbent_dir, cand_dir)
+        spent = sum(r.cost_usd for r in cand_result.per_case.values())
+        outcome = ("accepted" if d.accept else
+                   "transfer_rejected" if d.vetoes and "second-model" in d.reason else
+                   "near_miss" if d.near_miss else "rejected")
+        self.history.append(HistoryEntry(
+            state.round, cand["id"], cand["component"], cand["hypothesis"], diff,
+            outcome, d.reason, d.delta_S, d.delta_C,
+            d.improved, d.regressed, round(spent, 4)))
+        if d.accept:
+            self.publisher.publish(self.run, state.round, cand_dir, diff, d.to_json(), cand["hypothesis"])
+            shutil.rmtree(self.run.incumbent_dir)
+            shutil.copytree(cand_dir, self.run.incumbent_dir)
+            state.incumbent_eval = cand["eval"]
+            state.S_star = max(state.S_star or 0.0, cand_result.S)
+            state.accepted.append(cand["id"])
+        self._end_round(state, accepted=d.accept)
