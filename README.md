@@ -45,6 +45,12 @@ harness-evolve status runs/math-1
 harness-evolve diff runs/math-1               # accepted edits, as diffs to review
 ```
 
+What to expect (our run, DeepSeek-V4.1-Flash, $1.06): the starting harness solved 76% of the 50 evolve
+problems, with a measured noise band of ±5.6 points. The proposer read the trajectories and aimed three
+edits at real failures (runs that never submit an answer, then wrong arithmetic); each gained +2 to +3
+points, inside the noise, so none was accepted. With 50 cases only bigger gains are detectable; more
+cases narrow the band.
+
 `--budget` is a hard cap in dollars. A run that stops (budget, Ctrl-C, a provider outage) resumes with
 the same command, and nothing already paid for is paid again.
 
