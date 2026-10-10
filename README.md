@@ -14,6 +14,8 @@ agent twice.
 Used on a production code-diagnosis agent (agent-platform), on SWE-bench Verified with
 DeepSeek-V4.1-Flash:
 
+![Held-out accuracy and cost per task: original one run 78.8% at $0.033, original best of 2 runs 89.9% at $0.066, evolved one run 89.9% at $0.040](docs/results.png)
+
 | Held-out: 66 cases from repositories the optimizer never saw | Original harness | Evolved harness |
 |---|---|---|
 | Finds the file the fix must change (single run) | 78.8% | **89.9%** (+11.1, 95% CI +6.1 to +16.2) |
