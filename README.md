@@ -14,7 +14,7 @@ agent twice.
 Used on a production code-diagnosis agent ([agent-platform](https://github.com/sidreddy88/agent-platform)), on SWE-bench Verified with
 DeepSeek-V4.1-Flash:
 
-![Held-out accuracy and cost per task: original one run 78.8% at $0.033, original best of 2 runs 89.9% at $0.066, evolved one run 89.9% at $0.040](docs/results.png)
+![Held-out accuracy and cost per task: original one run 78.8% at $0.033, original best of 2 runs 89.9% at $0.066, evolved one run 89.9% at $0.040](https://raw.githubusercontent.com/sidreddy88/harness-evolve/main/docs/results.png)
 
 | Held-out: 66 cases from repositories the optimizer never saw | Original harness | Evolved harness |
 |---|---|---|
