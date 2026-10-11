@@ -23,6 +23,7 @@ content hash, so a stopped run resumes without paying twice.
 | Settings shown as behaviour | Each setting appears with what it does and its allowed range | Ours: in our first runs the proposer never touched settings until they were shown this way |
 | Answers kept from the proposer | Anything after `HIDDEN_MARKER` in a trajectory's `detail` is cut before the proposer sees it | Ours |
 | Agent self-feedback | If trajectories include `self_feedback` (the agent's own words about the setup after a failing run), it is shown as evidence | Idea from HarnessCompass, arXiv 2608.01918 ("proactive first-person feedback") |
+| ATIF trajectories | `atif.py` converts Harbor's ATIF trajectories (tool calls matched to outputs by id, costs, token totals, reward as verdict) into evidence records | ATIF, the trajectory format Harbor writes; idea from the "Building VT Code, a year in" article (Hugging Face, 2026-09-03) |
 | Cost by prompt source | If trajectories include `cost_by_source`, the proposer sees where the money goes and is told to change what the harness asks for, never to ask the agent to be brief | Ours |
 
 ## Screening an edit (`candidates.py`, `critic.py`)

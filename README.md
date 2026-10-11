@@ -109,6 +109,10 @@ out why runs fail. Raise `ProviderFailure` for billing, auth or outage errors. N
 answer reach the proposer: put it after `evidence.HIDDEN_MARKER` in a trajectory's `detail`.
 See `examples/math_agent/evaluator.py`.
 
+If your agent runs in [Harbor](https://github.com/harbor-framework/harbor), you don't need to build
+trajectory records yourself: `harness_evolve.atif.harbor_job(job_dir)` turns a Harbor job's ATIF
+trajectories and rewards into records the proposer can read (`from_atif` does one trajectory).
+
 **3. A profile**
 
 ```python
