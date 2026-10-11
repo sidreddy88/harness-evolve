@@ -49,6 +49,10 @@ content hash, so a stopped run resumes without paying twice.
 | Confirm before accepting | A candidate that passes the rules is measured again on fresh trials (incumbent and candidate, same cases); it is accepted only if that second, independent measurement passes the rules too. Costs one more evaluation per would-be acceptance, and removes acceptances that rested on one lucky measurement (`confirm`, off by default) | Ours; the same idea as a confirmation run before shipping an A/B result |
 | Exploration rule | After N rejected candidates in a row, the next must change a component family none of them touched (`diversity_after`, off by default) | Simplified from RRSI's component novelty |
 
+## Pruning (`loop.py`)
+
+After the rounds, if two or more edits were accepted (`prune`, off by default), each accepted edit is left out of the final harness in turn: its files go back to their content before it, and the harness is measured again on the evolve cases. The edit is removed if the harness is not worse without it: pass rate within the noise band, cost within the cost band, no guard case broken. Edits whose files a later accepted edit also changed are kept untested, since they can't be removed on their own. Ours: each edit was accepted against the harness of its time, and a later edit can make an earlier one unnecessary.
+
 ## Reporting (`report.py`, `pass_k.py`)
 
 | What | How | Source |

@@ -60,7 +60,8 @@ def outcome(run_dir: Path) -> dict:
                 rounds.append({k: e.get(k) for k in ("round", "component", "outcome", "delta_S", "delta_C",
                                                      "reason", "hypothesis")})
     out = {"phase": state.get("phase"), "stop_reason": state.get("stop_reason"),
-           "accepted": state.get("accepted") or [], "spent_usd": round(state.get("spent_usd") or 0.0, 3),
+           "accepted": state.get("accepted") or [], "pruned": (state.get("prune") or {}).get("removed", []),
+           "spent_usd": round(state.get("spent_usd") or 0.0, 3),
            "S_star": state.get("S_star"), "delta": state.get("delta"), "rounds": rounds}
     rep = run_dir / "report" / "report.json"
     if rep.exists():

@@ -32,7 +32,7 @@ from pathlib import Path
 
 # Where a round is in its life. A resume restarts the current phase from its
 # beginning; every phase is idempotent given the cached evals and files.
-PHASES = ("smoke", "evaluate", "propose", "screen", "decide", "confirm", "transfer", "final", "done")
+PHASES = ("smoke", "evaluate", "propose", "screen", "decide", "confirm", "transfer", "prune", "final", "done")
 
 
 @dataclass
@@ -51,7 +51,8 @@ class RunState:
     stalled_rounds: int = 0             # consecutive rounds with no acceptance
     spent_usd: float = 0.0              # measured spend so far (cost meter), survives resume
     stop_reason: str | None = None
-    rounds_stop_reason: str | None = None   # why the rounds ended, when a final phase follows
+    rounds_stop_reason: str | None = None   # why the rounds ended, when a prune or final phase follows
+    prune: dict | None = None           # pruning progress: next accepted edit to test, removed, kept
     # Measured, not reconstructed: started_at, sessions (one per process, with
     # start/end/why it ended), per-phase durations, replay counts. The resume
     # line's "ran unattended for N hours" comes from here.

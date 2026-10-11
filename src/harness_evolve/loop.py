@@ -142,6 +142,12 @@ class OptimizerConfig:
     # accepted only if that independent measurement passes too. Costs two more evaluations
     # per would-be acceptance; keeps a lucky first measurement from being accepted.
     confirm: bool = False
+    # Prune accepted edits: after the rounds, if two or more edits were accepted, try the
+    # final harness without each one (its files restored to their content before it) and
+    # drop the edit if the harness is not worse without it (pass rate within the noise
+    # band, cost within the cost band, no guard case broken). Edits whose files a later
+    # accepted edit also changed are kept untested: they can't be removed on their own.
+    prune: bool = False
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -341,6 +347,8 @@ class Optimizer:
             await self._confirm(state, budget)
         elif state.phase == "transfer":
             await self._transfer(state, budget)
+        elif state.phase == "prune":
+            await self._prune(state, budget)
         else:
             raise RuntimeError(f"unknown phase {state.phase!r}")
 
@@ -355,7 +363,14 @@ class Optimizer:
             why = f"{state.stalled_rounds} consecutive rounds without an acceptance"
         if why is None:
             state.phase = "propose"
-        elif self.cfg.final_cases:
+        elif self.cfg.prune and len(state.accepted) >= 2:
+            state.phase, state.rounds_stop_reason = "prune", why
+            state.prune = {"next": 0, "removed": [], "kept": []}
+        else:
+            self._after_rounds(state, why)
+
+    def _after_rounds(self, state: RunState, why: str) -> None:
+        if self.cfg.final_cases:
             state.phase, state.rounds_stop_reason = "final", why
         else:
             state.phase, state.stop_reason = "done", why
@@ -664,7 +679,8 @@ class Optimizer:
         if not same:
             evolved, _ = await self._evaluate(state, budget, self.run.incumbent_dir, cases, k)
         meta = {"run_id": state.run_id, "heldout_cases": len(cases), "trials": k,
-                "accepted": state.accepted, "rounds_stop_reason": state.rounds_stop_reason,
+                "accepted": state.accepted, "pruned": (state.prune or {}).get("removed", []),
+                "rounds_stop_reason": state.rounds_stop_reason,
                 "original_hash": candidates.content_hash(self.run.original_dir),
                 "evolved_hash": candidates.content_hash(self.run.incumbent_dir),
                 "spent_usd": round(state.spent_usd, 2)}
@@ -880,6 +896,56 @@ class Optimizer:
         else:
             d.reason += f"; {note}, within margin {self.cfg.transfer_margin}"
         self._finish_decision(state, d)
+
+    async def _prune(self, state: RunState, budget: Budget) -> None:
+        """Leave one accepted edit out of the final harness (one edit per step, in the order
+        they were accepted) and remove it if the harness is not worse without it."""
+        p = state.prune
+        ids = state.accepted
+        if p["next"] >= len(ids):
+            note = (f"pruned {', '.join(p['removed'])}" if p["removed"] else "pruning removed nothing")
+            self._after_rounds(state, f"{state.rounds_stop_reason}; {note}")
+            return
+        i = p["next"]
+        chain = [self.run.original_dir] + [self.run.candidate_dir(int(c[1:])) for c in ids]
+        files = candidates.changed_files(chain[i], chain[i + 1])
+        later = {f for j in range(i + 1, len(ids)) for f in candidates.changed_files(chain[j], chain[j + 1])}
+        entry = next((e for e in self.history.entries() if e.candidate_id == ids[i] and e.outcome == "accepted"),
+                     None)
+        component, hypothesis = (entry.component, entry.hypothesis) if entry else ("unknown", "")
+        p["next"] = i + 1
+        if not files or set(files) & later:
+            p["kept"].append(ids[i])
+            self.history.append(HistoryEntry(state.round, ids[i], component, hypothesis, "", "prune_kept",
+                                             "not tested: a later accepted edit changed the same files"))
+            return
+        before = candidates.harness_files(chain[i])
+        pruned_dir = self.run.root / "candidates" / f"prune-{ids[i]}"
+        candidates.apply_edit(self.run.incumbent_dir, pruned_dir, {f: before[f] for f in files})
+        cases = self.cfg.evolve_cases + self.cfg.guard_cases
+        inc_res, _ = self._load_ref(json.loads(state.incumbent_eval))
+        pr_res, _ = await self._evaluate(state, budget, pruned_dir, cases, self.cfg.trials)
+        dS = pr_res.S - inc_res.S
+        dC = (pr_res.C - inc_res.C) / inc_res.C if inc_res.C else 0.0
+        delta, cost_band = state.delta or 0.0, state.delta_cost or 0.0
+        broken = [g for g in self.cfg.guard_cases
+                  if pr_res.per_case[g].passes == 0 and inc_res.per_case[g].passes > 0]
+        problems = ([f"pass rate fell {dS:+.3f}, beyond the noise band {delta:.3f}"] if dS < -delta else []) + \
+                   ([f"cost rose {dC:+.1%}, beyond the cost band {cost_band:.1%}"] if dC > cost_band else []) + \
+                   [f"guard case {g} broke" for g in broken]
+        diff = candidates.diff(self.run.incumbent_dir, pruned_dir)
+        if problems:
+            p["kept"].append(ids[i])
+            outcome, reason = "prune_kept", "needed: without it " + "; ".join(problems)
+        else:
+            p["removed"].append(ids[i])
+            outcome, reason = "pruned", f"not needed: without it dS {dS:+.3f}, dC {dC:+.1%}"
+            shutil.rmtree(self.run.incumbent_dir)
+            shutil.copytree(pruned_dir, self.run.incumbent_dir)
+            state.incumbent_eval = json.dumps(self._eval_ref(pruned_dir, self.cfg.trials))
+        spent = sum(r.cost_usd for r in pr_res.per_case.values())
+        self.history.append(HistoryEntry(state.round, ids[i], component, hypothesis, diff, outcome, reason,
+                                         round(dS, 4), round(dC, 4), cost_usd=round(spent, 4)))
 
     def _finish_decision(self, state: RunState, d: Decision) -> None:
         cand = state.candidate
