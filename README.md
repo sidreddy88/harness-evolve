@@ -140,6 +140,22 @@ asyncio.run(opt.run_until_stopped())
 Or put a `build(run_dir, budget_usd, rounds)` function in a config file and use the CLI, as the
 example does.
 
+## Benchmarking the optimizer
+
+`harness-evolve bench` measures the optimizer itself, so a change to its method is judged by
+evidence, not opinion. Known-answer scenarios have a right outcome: a scripted proposer puts one known
+edit in front of the acceptance rules. A real fix to a planted flaw must be accepted, a harmful edit
+must be rejected, and a neutral rewording must not be accepted (a false accept). Open scenarios run the
+real proposer and report what it finds and what it gains on held-out cases, per dollar.
+
+```bash
+python examples/math_agent/fetch_data.py --n 260 --out examples/math_agent/data/problems-bench.jsonl
+harness-evolve bench examples/math_agent/bench.py --out runs/bench-1
+```
+
+Results go to `runs/bench-1/bench.md`. Write your own scenarios with `harness_evolve.bench.Scenario`
+and `scripted_llm` (see `examples/math_agent/bench.py`).
+
 ## Limits
 
 - It needs an automatic pass/fail check per case. No grader, no optimizer.

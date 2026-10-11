@@ -40,18 +40,24 @@ PROFILE = AgentProfile.build(
     grader=TrajectoryGrader())
 
 
-def build(run_dir: str | Path, budget_usd: float = 2.0, rounds: int = 3) -> Optimizer:
-    if not PROBLEMS.exists():
-        raise SystemExit(f"no data: run `python {HERE / 'fetch_data.py'}` first")
+def build(run_dir: str | Path, budget_usd: float = 2.0, rounds: int = 3, *,
+          harness_dir: Path | None = None, problems: Path | None = None, n_evolve: int = 50,
+          heldout: bool = True, proposer_llm=None, critic_llm=None) -> Optimizer:
+    """The example's optimizer. Keyword options are for the benchmark (bench.py): another starting
+    harness, a larger problem set, scripted proposer/critic, no held-out phase."""
+    problems = Path(problems or PROBLEMS)
+    if not problems.exists():
+        raise SystemExit(f"no data at {problems}: run `python {HERE / 'fetch_data.py'}` first")
     profiles.use(PROFILE)
-    ids = [json.loads(x)["id"] for x in PROBLEMS.read_text().splitlines()]
+    ids = [json.loads(x)["id"] for x in problems.read_text().splitlines()]
     random.Random(0).shuffle(ids)
-    evolve, heldout = ids[:50], ids[50:]
+    evolve, held = ids[:n_evolve], ids[n_evolve:]
     cfg = OptimizerConfig(
-        evolve_cases=evolve, guard_cases=[], final_cases=heldout, final_trials=3,
+        evolve_cases=evolve, guard_cases=[], final_cases=held if heldout else [], final_trials=3,
         budget_usd=budget_usd, max_rounds=rounds, trials=2, calibration_trials=2,
-        default_case_cost_usd=0.003, cost_band=True,
+        default_case_cost_usd=0.003, cost_band=True, allow_unpriced_llm=proposer_llm is not None,
         parallel_lanes=8, case_lanes={c: c for c in ids})
     llm = litellm_llm(PROPOSER_MODEL, prices=PRICES if PROPOSER_MODEL == MODEL else None)
-    return Optimizer(run_dir, HERE / "harness", cfg, evaluator=MathEvaluator(PROBLEMS, MODEL, PRICES),
-                     proposer_llm=llm, critic_llm=llm, critic_patterns=[])
+    return Optimizer(run_dir, Path(harness_dir or HERE / "harness"), cfg,
+                     evaluator=MathEvaluator(problems, MODEL, PRICES),
+                     proposer_llm=proposer_llm or llm, critic_llm=critic_llm or llm, critic_patterns=[])
