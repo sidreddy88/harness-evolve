@@ -33,8 +33,8 @@ def bench_spec(tmp_path, monkeypatch):
     async def fake_acompletion(model, messages, tools, **kw):
         task = next(m["content"] for m in messages if m["role"] == "user")
         i = int(task.split("What is ")[1].split(" +")[0])
-        if "Do not use the calculator" in task:              # the harmful edit: guess, often wrong
-            return _resp([("submit_answer", {"answer": 2 * i + (1 if i % 2 else 0)})])
+        if "nearest hundred" in task and messages[-1]["role"] == "tool":   # the harmful edit: round
+            return _resp([("submit_answer", {"answer": round(2 * i, -2)})])
         if messages[-1]["role"] == "tool":                   # second turn: submit
             return _resp([("submit_answer", {"answer": 2 * i})])
         return _resp([("calculator", {"expression": f"{i}+{i}"})])   # first turn: calculate
@@ -57,6 +57,19 @@ def test_known_answer_scenarios_pass(bench_spec, tmp_path):
     assert by["reject-noise"]["passed"] is True and by["reject-noise"]["accepted"] == []
     md = (tmp_path / "bench" / "bench.md").read_text()
     assert "| accept-good | accepted | PASS | ['r1']" in md
+
+
+def test_partial_rerun_updates_instead_of_replacing(bench_spec, tmp_path):
+    from harness_evolve import bench
+
+    kats = [s for s in bench_spec.scenarios() if s.expect is not None]
+    out = tmp_path / "bench"
+    asyncio.run(bench.run(kats, out))
+    import shutil
+    shutil.rmtree(out / "reject-bad")
+    asyncio.run(bench.run(kats, out, only=["reject-bad"]))
+    names = [r["name"] for r in json.loads((out / "bench.json").read_text())]
+    assert names == ["accept-good", "reject-bad", "reject-noise"]
 
 
 def test_judge_rules():

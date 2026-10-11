@@ -1,6 +1,6 @@
 """Download a sample of GSM-Hard (Gao et al., "PAL: Program-aided Language
-Models", 2022): GSM8K questions with large, awkward numbers, so the arithmetic
-itself is hard and how the agent uses its calculator matters.
+Models", 2022): GSM8K questions with large, awkward numbers, so the starting harness
+has room to improve.
 
     python fetch_data.py                                   # 80 problems -> data/problems.jsonl
     python fetch_data.py --n 260 --out data/problems-bench.jsonl   # the benchmark set

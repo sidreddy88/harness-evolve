@@ -101,6 +101,13 @@ async def run(scenarios: list[Scenario], out_dir: Path, only: list[str] | None =
         res = outcome(run_dir)
         results.append({"name": sc.name, "description": sc.description, "expect": sc.expect,
                         "passed": judge(sc.expect, res), **res})
+    if only and (out_dir / "bench.json").exists():
+        # A partial re-run updates its scenarios in the existing results instead of replacing them.
+        previous = json.loads((out_dir / "bench.json").read_text())
+        fresh = {r["name"]: r for r in results}
+        names = [r["name"] for r in previous] + [n for n in fresh if n not in {r["name"] for r in previous}]
+        old = {r["name"]: r for r in previous}
+        results = [fresh.get(n, old.get(n)) for n in names]
     (out_dir / "bench.json").write_text(json.dumps(results, indent=1))
     (out_dir / "bench.md").write_text(render(results))
     return results

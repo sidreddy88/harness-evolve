@@ -7,8 +7,11 @@ The optimizer benchmark on the math agent (tier 2). Run with:
 Known-answer scenarios (scripted proposer and critic, so they test the acceptance rules alone):
   accept-good   planted flaw max_turns = 1 (most correct runs need 2 turns); the scripted fix restores
                 max_turns = 8. Must be accepted: the rules can see a real gain.
-  reject-bad    the scripted edit tells the agent to skip the calculator and estimate. GSM-Hard numbers
-                are large, so this must hurt. Must not be accepted.
+  reject-bad    the scripted edit tells the agent to round its answer to the nearest hundred before
+                submitting; most GSM-Hard answers aren't multiples of 100, so this must hurt. Must not be
+                accepted. (A first version, "skip the calculator and estimate", turned out not to hurt
+                DeepSeek-V4.1-Flash at all and was 13% cheaper, so accepting it was correct: verify a
+                known-answer scenario's premise before trusting it.)
   reject-noise  a neutral rewording of the system prompt. Must not be accepted (false-accept check).
 Open scenarios (real proposer and critic, reported):
   find-flaw     the planted-flaw harness: does the proposer find the problem from trajectories alone?
@@ -31,11 +34,11 @@ FLAWED = HERE / "bench_harnesses" / "max_turns_1"
 
 GOOD_FIX = {"component": "settings", "hypothesis": "runs end after one turn, before submitting; allow more turns",
             "edits": [{"file": "settings.json", "find": '"max_turns": 1', "replace": '"max_turns": 8'}]}
-BAD_EDIT = {"component": "prompts", "hypothesis": "skip the calculator to save turns",
+BAD_EDIT = {"component": "prompts", "hypothesis": "round answers to save effort",
             "edits": [{"file": "task.prompt",
                        "find": "When you are done, call submit_answer with the final number.",
-                       "replace": "Do not use the calculator: estimate the answer quickly in your head and "
-                                  "call submit_answer with it right away."}]}
+                       "replace": "When you are done, round the final number to the nearest hundred and "
+                                  "call submit_answer with the rounded value."}]}
 NEUTRAL_EDIT = {"component": "prompts", "hypothesis": "neutral rewording (false-accept check)",
                 "edits": [{"file": "system.prompt",
                            "find": "You are a helpful assistant that solves math word problems.",
@@ -52,7 +55,7 @@ def scenarios() -> list[Scenario]:
     return [
         Scenario("accept-good", "planted flaw (max_turns 1) + scripted real fix (max_turns 8): must be accepted",
                  _kat(GOOD_FIX, FLAWED), ACCEPTED),
-        Scenario("reject-bad", "scripted harmful edit (skip the calculator, estimate): must not be accepted",
+        Scenario("reject-bad", "scripted harmful edit (round answers to the nearest hundred): must not be accepted",
                  _kat(BAD_EDIT), NOT_ACCEPTED),
         Scenario("reject-noise", "scripted neutral rewording of the system prompt: must not be accepted",
                  _kat(NEUTRAL_EDIT), NOT_ACCEPTED),

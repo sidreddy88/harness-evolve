@@ -35,7 +35,7 @@ measurement would have reported it as a gain.
 ## Quickstart
 
 The example is a small math agent (a calculator tool and a submit tool) on GSM-Hard, GSM8K questions
-with large, awkward numbers, where how the agent uses its calculator matters.
+with large, awkward numbers that leave room to improve.
 
 ```bash
 git clone https://github.com/sidreddy88/harness-evolve && cd harness-evolve
@@ -153,7 +153,19 @@ python examples/math_agent/fetch_data.py --n 260 --out examples/math_agent/data/
 harness-evolve bench examples/math_agent/bench.py --out runs/bench-1
 ```
 
-Results go to `runs/bench-1/bench.md`. Write your own scenarios with `harness_evolve.bench.Scenario`
+Results go to `runs/bench-1/bench.md`. Our first run (DeepSeek-V4.1-Flash, $9.37 in total):
+
+| Scenario | Expected | Result |
+|---|---|---|
+| accept-good: planted flaw (`max_turns` 1) + scripted fix | accepted | PASS: +49 points |
+| reject-bad: scripted "round answers to the nearest hundred" | not accepted | PASS: −21.5 points, rejected |
+| reject-noise: scripted neutral rewording | not accepted | PASS: rejected |
+| find-flaw: planted flaw, real proposer | (reported) | found the flaw from trajectories: held-out 28.3% → 79.0% |
+| standard: normal harness, 200 problems, real proposer | (reported) | one prompt edit accepted: held-out accuracy unchanged (83.3% → 83.9%), ~11% cheaper |
+
+The first version of reject-bad ("skip the calculator and estimate") was accepted: it didn't hurt this
+model at all and was 13% cheaper, so the optimizer was right and the test was wrong. A known-answer
+scenario's premise has to be measured, not assumed. Write your own scenarios with `harness_evolve.bench.Scenario`
 and `scripted_llm` (see `examples/math_agent/bench.py`).
 
 ## Limits
