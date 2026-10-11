@@ -2,7 +2,8 @@
 Candidate harnesses: copies of a harness directory with one edit applied.
 
 The edit surface is bounded to the files that already exist in the harness
-directory: an edit may rewrite them, never add or delete files. Before anything is spent evaluating a candidate, it must pass
+directory: an edit may rewrite them, never add or delete files. Before anything is spent
+evaluating a candidate, it must pass
 structural validation, so a candidate that can't even load (bad JSON, a
 template placeholder the code never fills, a removed tool description, a
 turn budget of 500) is rejected for free. RRSI does the same with its

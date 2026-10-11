@@ -20,9 +20,8 @@ import json
 import random
 from pathlib import Path
 
-from harness_evolve.pass_k import pass_at_k, pass_hat_k
-
 from harness_evolve.acceptance import CaseResult
+from harness_evolve.pass_k import pass_at_k, pass_hat_k
 
 
 def _mean(xs: list[float]) -> float:

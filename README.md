@@ -177,6 +177,9 @@ and `scripted_llm` (see `examples/math_agent/bench.py`).
 
 ## Credits
 
+Full mapping of each component to its source, and what we changed: [docs/methods.md](docs/methods.md).
+
+
 - Reflective, trace-driven proposals: GEPA (Agrawal et al., "GEPA: Reflective Prompt Evolution Can
   Outperform Reinforcement Learning", ICLR 2026).
 - The critic and the one-edit-per-round discipline: RRSI (google-research/rrsi, Apache-2.0); the

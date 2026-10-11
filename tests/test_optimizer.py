@@ -532,7 +532,8 @@ def test_tripwire_pauses_mid_evaluation_when_a_tool_fails_wholesale(tmp_path):
     many = [f"c{i}" for i in range(12)]
     cfg = dict(max_rounds=0, health_every=4, health_window=8)
     opt = Optimizer(tmp_path / "run", BASE,
-                    OptimizerConfig(allow_unpriced_llm=True, evolve_cases=many, guard_cases=[], budget_usd=100.0, **cfg),
+                    OptimizerConfig(allow_unpriced_llm=True, evolve_cases=many, guard_cases=[],
+                                    budget_usd=100.0, **cfg),
                     StepEvaluator(broken_verify=True), terse_proposer(), accept_all, PATTERNS)
     ev_ = opt.evaluator
     state = asyncio.run(opt.run_until_stopped())
@@ -578,7 +579,8 @@ def test_watchdog_dumps_stacks_and_exits_resumably(tmp_path, monkeypatch):
 def test_final_phase_writes_heldout_report_against_rerun_baseline(tmp_path):
     ev_ = StepEvaluator()
     opt = Optimizer(tmp_path / "run", BASE,
-                    OptimizerConfig(allow_unpriced_llm=True, evolve_cases=CASES, guard_cases=GUARDS, budget_usd=100.0, max_rounds=1,
+                    OptimizerConfig(allow_unpriced_llm=True, evolve_cases=CASES, guard_cases=GUARDS,
+                                    budget_usd=100.0, max_rounds=1,
                                     final_cases=["h1", "h2"], final_trials=3),
                     ev_, terse_proposer(), accept_all, PATTERNS)
     state = asyncio.run(opt.run_until_stopped())
@@ -594,7 +596,8 @@ def test_final_phase_writes_heldout_report_against_rerun_baseline(tmp_path):
 def test_final_phase_without_an_acceptance_runs_the_original_once(tmp_path):
     ev_ = StepEvaluator()
     opt = Optimizer(tmp_path / "run", BASE,
-                    OptimizerConfig(allow_unpriced_llm=True, evolve_cases=CASES, guard_cases=GUARDS, budget_usd=100.0, max_rounds=1,
+                    OptimizerConfig(allow_unpriced_llm=True, evolve_cases=CASES, guard_cases=GUARDS,
+                                    budget_usd=100.0, max_rounds=1,
                                     final_cases=["h1"], final_trials=2),
                     ev_, terse_proposer(), reject_all, PATTERNS)
     state = asyncio.run(opt.run_until_stopped())

@@ -55,7 +55,8 @@ def example(tmp_path, monkeypatch):
         return LLMReply(json.dumps({"component": "tool_descriptions", "hypothesis": "use the calculator for every step",
                                     "edits": [{"file": "tool_descriptions.json",
                                                "find": "Evaluate an arithmetic expression.",
-                                               "replace": "Evaluate an arithmetic expression; use it for every step."}]}),
+                                               "replace": "Evaluate an arithmetic expression; "
+                                                          "use it for every step."}]}),
                         0.001)
     monkeypatch.setattr(config, "litellm_llm", lambda *a, **k: proposer)
     return config

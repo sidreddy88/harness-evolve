@@ -26,7 +26,6 @@ from __future__ import annotations
 
 from harness_evolve.acceptance import EvalResult
 
-
 HIDDEN_MARKER = "[[hidden]]"
 
 
@@ -77,7 +76,7 @@ def build(result: EvalResult, trajectories: list[dict], max_failing: int = 3,
         lines += ["", "Agent self-feedback after failing runs (the agent's own words about the setup):"]
         lines += [f"  - {fb[:400]}" for _, fb in feedback]
 
-    failing = [(r, g) for r, g in zip(trajectories, grades) if r.get("verdict") != "PASS"][:max_failing]
+    failing = [(r, g) for r, g in zip(trajectories, grades, strict=True) if r.get("verdict") != "PASS"][:max_failing]
     for rec, g in failing:
         lines += ["", f"=== Failing trajectory: {rec['instance_id']} trial {rec.get('trial')} "
                       f"({outcome(rec)[:160]}) ==="]

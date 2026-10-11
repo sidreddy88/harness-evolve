@@ -28,7 +28,8 @@ class SecondModel:
 
 
 def _opt(tmp_path, second, margin=2):
-    cfg = OptimizerConfig(allow_unpriced_llm=True, evolve_cases=CASES, guard_cases=GUARDS, budget_usd=100.0, max_rounds=1,
+    cfg = OptimizerConfig(allow_unpriced_llm=True, evolve_cases=CASES, guard_cases=GUARDS,
+                          budget_usd=100.0, max_rounds=1,
                           transfer_cases=[f"t{i}" for i in range(10)], transfer_margin=margin)
     return Optimizer(tmp_path / "run", BASE, cfg, FakeEvaluator(), terse_proposer(), accept_all, PATTERNS,
                      transfer_evaluator=second)
@@ -75,7 +76,8 @@ class BatchEvaluator:
 
 def test_batched_evaluator_gets_chunks_and_results_are_cached_per_case(tmp_path):
     ev = BatchEvaluator()
-    cfg = OptimizerConfig(allow_unpriced_llm=True, evolve_cases=CASES, guard_cases=GUARDS, budget_usd=100.0, max_rounds=1)
+    cfg = OptimizerConfig(allow_unpriced_llm=True, evolve_cases=CASES, guard_cases=GUARDS,
+                          budget_usd=100.0, max_rounds=1)
     opt = Optimizer(tmp_path / "run", BASE, cfg, ev, terse_proposer(), accept_all, PATTERNS)
     state = asyncio.run(opt.run_until_stopped())
     n = len(CASES + GUARDS)

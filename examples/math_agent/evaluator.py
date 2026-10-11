@@ -13,10 +13,10 @@ import asyncio
 import json
 from pathlib import Path
 
+from agent import solve
+
 from harness_evolve import CaseResult, EvalOutcome, EvalResult, ProviderFailure
 from harness_evolve.evidence import HIDDEN_MARKER
-
-from agent import solve
 
 
 def _correct(answer: float | None, target: float) -> bool:
