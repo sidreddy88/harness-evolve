@@ -1,5 +1,7 @@
 # harness-evolve
 
+[![tests](https://github.com/sidreddy88/harness-evolve/actions/workflows/tests.yml/badge.svg)](https://github.com/sidreddy88/harness-evolve/actions/workflows/tests.yml)
+
 Improve an AI agent's harness (its prompts, tool descriptions and settings) from the agent's own failure
 traces, and keep a change only when it beats measured run-to-run noise.
 
