@@ -56,17 +56,17 @@ import os
 import shutil
 import time
 from collections import deque
-from datetime import datetime, timezone
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
 from harness_evolve import candidates, critic, evidence, health, profiles, proposer, report
 from harness_evolve.acceptance import (
-    Decision,
     AcceptanceConfig,
     CaseResult,
+    Decision,
     EvalResult,
     calibrate_cost_delta,
     calibrate_delta,
@@ -74,8 +74,8 @@ from harness_evolve.acceptance import (
 )
 from harness_evolve.budget import Budget, BudgetExceeded, estimate_eval_cost
 from harness_evolve.evaluator import Evaluator, ProviderFailure, UnpricedModel
-from harness_evolve.llm import reply_cost
 from harness_evolve.history import EditHistory, HistoryEntry
+from harness_evolve.llm import reply_cost
 from harness_evolve.state import RunDir, RunState
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,7 @@ class LocalPublisher:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _cases_key(cases: list[str]) -> str:
@@ -302,7 +302,7 @@ class Optimizer:
         """No progress for stall_minutes: record why, dump every stack, and
         exit hard. A hang may hold threads or subprocess pipes that a normal
         shutdown would wait on forever, which is how r3's process sat for 18h."""
-        path = self.run.root / f"watchdog-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.txt"
+        path = self.run.root / f"watchdog-{datetime.now(UTC):%Y%m%dT%H%M%S}.txt"
         with path.open("w") as f:
             f.write(f"no progress for {idle / 60:.1f} min at round {state.round} {state.phase}\n\n")
             faulthandler.dump_traceback(file=f, all_threads=True)

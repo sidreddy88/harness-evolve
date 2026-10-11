@@ -4,6 +4,7 @@ DeepSeek-V4.1-Flash). Run: python docs/make_chart.py"""
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker
@@ -22,7 +23,7 @@ b = a1.bar(LABELS, ACC, color=COLORS, width=0.6)
 a1.set_ylim(0, 100)
 a1.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(decimals=0))
 a1.set_title("Held-out accuracy", fontsize=11, loc="left")
-for rect, v in zip(b, ACC):
+for rect, v in zip(b, ACC, strict=True):
     a1.text(rect.get_x() + rect.get_width() / 2, v / 2, f"{v:.1f}%", ha="center", fontsize=10,
             color="white", fontweight="bold")
 a1.errorbar(2, 89.9, yerr=[[89.9 - (78.8 + 6.1)], [(78.8 + 16.2) - 89.9]], fmt="none",
@@ -32,7 +33,7 @@ b = a2.bar(LABELS, COST, color=COLORS, width=0.6)
 a2.set_ylim(0, 0.08)
 a2.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"${v:.2f}"))
 a2.set_title("Cost per task", fontsize=11, loc="left")
-for rect, v in zip(b, COST):
+for rect, v in zip(b, COST, strict=True):
     a2.text(rect.get_x() + rect.get_width() / 2, v / 2, f"${v:.3f}", ha="center", fontsize=10,
             color="white", fontweight="bold")
 

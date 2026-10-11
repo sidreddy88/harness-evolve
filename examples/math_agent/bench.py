@@ -25,9 +25,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from harness_evolve.bench import ACCEPTED, NOT_ACCEPTED, Scenario, scripted_llm  # noqa: E402
-
 import config  # noqa: E402
+
+from harness_evolve.bench import ACCEPTED, NOT_ACCEPTED, Scenario, scripted_llm  # noqa: E402
 
 PROBLEMS = HERE / "data" / "problems-bench.jsonl"
 FLAWED = HERE / "bench_harnesses" / "max_turns_1"

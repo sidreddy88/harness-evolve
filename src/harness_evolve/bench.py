@@ -117,7 +117,8 @@ def render(results: list[dict]) -> str:
     def pct(x):
         return "-" if x is None else f"{x:.3f}"
     lines = ["# harness-evolve benchmark", "",
-             "| Scenario | Expect | Result | Accepted | First round (dS, dC) | Held-out pass@1 (orig → evolved) | Spent |",
+             "| Scenario | Expect | Result | Accepted | First round (dS, dC) "
+             "| Held-out pass@1 (orig → evolved) | Spent |",
              "|---|---|---|---|---|---|---|"]
     for r in results:
         verdict = {True: "PASS", False: "FAIL", None: "report"}[r.get("passed")]

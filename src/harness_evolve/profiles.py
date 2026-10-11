@@ -135,7 +135,7 @@ class AgentProfile:
               setting_bounds: dict | None = None,
               component_files: dict[str, Callable[[str], bool]] | None = None,
               component_families: dict | None = None, grader: object | None = None,
-              health_baseline: dict | None = None) -> "AgentProfile":
+              health_baseline: dict | None = None) -> AgentProfile:
         """A profile with the proposer and critic instructions written for your agent.
 
         agent_description: what the agent does, its tools, how it finishes a task.

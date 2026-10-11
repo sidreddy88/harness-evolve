@@ -18,7 +18,7 @@ class LLMReply(str):
     """The reply text, plus what the call cost (None if unknown)."""
     cost_usd: float | None
 
-    def __new__(cls, text: str, cost_usd: float | None = None) -> "LLMReply":
+    def __new__(cls, text: str, cost_usd: float | None = None) -> LLMReply:
         obj = super().__new__(cls, text)
         obj.cost_usd = cost_usd
         return obj

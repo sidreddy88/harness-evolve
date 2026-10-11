@@ -19,10 +19,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+from evaluator import MathEvaluator  # noqa: E402
+
 from harness_evolve import AgentProfile, Optimizer, OptimizerConfig, litellm_llm, profiles  # noqa: E402
 from harness_evolve.grader import TrajectoryGrader  # noqa: E402
-
-from evaluator import MathEvaluator  # noqa: E402
 
 MODEL = os.environ.get("MODEL", "together_ai/deepseek-ai/DeepSeek-V4.1-Flash")
 PROPOSER_MODEL = os.environ.get("PROPOSER_MODEL", MODEL)
