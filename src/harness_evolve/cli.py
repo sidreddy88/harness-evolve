@@ -4,9 +4,11 @@ harness-evolve command line.
     harness-evolve run CONFIG.py --run-dir runs/r1 [--budget 5] [--rounds 3]
     harness-evolve status runs/r1
     harness-evolve diff runs/r1
+    harness-evolve bench BENCH.py --out runs/bench-1 [--only accept-good,reject-bad]
 
 CONFIG.py defines `build(run_dir, budget_usd=..., rounds=...) -> Optimizer`
-(see examples/math_agent/config.py). `run` on an existing run directory
+(see examples/math_agent/config.py); BENCH.py defines `scenarios() -> list[Scenario]`
+(see examples/math_agent/bench.py and harness_evolve/bench.py). `run` on an existing run directory
 resumes it where it stopped; nothing already paid for is paid again.
 """
 from __future__ import annotations
@@ -20,15 +22,15 @@ import sys
 from pathlib import Path
 
 
-def _load_config(path: Path):
+def _load_module(path: Path, required: str):
     spec = importlib.util.spec_from_file_location("harness_evolve_config", path)
     if spec is None or spec.loader is None:
         raise SystemExit(f"can't load config {path}")
     mod = importlib.util.module_from_spec(spec)
     sys.path.insert(0, str(path.parent))
     spec.loader.exec_module(mod)
-    if not hasattr(mod, "build"):
-        raise SystemExit(f"{path} must define build(run_dir, ...) -> Optimizer")
+    if not hasattr(mod, required):
+        raise SystemExit(f"{path} must define {required}()")
     return mod
 
 
@@ -73,6 +75,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("run_dir", type=Path)
     d = sub.add_parser("diff", help="show accepted edits")
     d.add_argument("run_dir", type=Path)
+    b = sub.add_parser("bench", help="benchmark the optimizer: known-answer and open scenarios")
+    b.add_argument("spec", type=Path)
+    b.add_argument("--out", type=Path, required=True)
+    b.add_argument("--only", help="comma-separated scenario names")
     args = ap.parse_args(argv)
 
     if args.cmd == "status":
@@ -86,7 +92,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"### {f.parent.name}\n{f.read_text()}")
         return 0
 
-    mod = _load_config(args.config.resolve())
+    if args.cmd == "bench":
+        from harness_evolve import bench
+        mod = _load_module(args.spec.resolve(), "scenarios")
+        only = args.only.split(",") if args.only else None
+        results = asyncio.run(bench.run(mod.scenarios(), args.out, only))
+        print(bench.render(results))
+        return 0 if all(r.get("passed") is not False for r in results) else 1
+
+    mod = _load_module(args.config.resolve(), "build")
     kwargs = {}
     params = inspect.signature(mod.build).parameters
     if args.budget is not None and "budget_usd" in params:
