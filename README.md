@@ -1,6 +1,6 @@
 # harness-evolve
 
-[![tests](https://github.com/sidreddy88/harness-evolve/actions/workflows/tests.yml/badge.svg)](https://github.com/sidreddy88/harness-evolve/actions/workflows/tests.yml)
+[![tests](https://github.com/sidreddy88/harness-evolve/actions/workflows/tests.yml/badge.svg)](https://github.com/sidreddy88/harness-evolve/actions/workflows/tests.yml) [![PyPI](https://img.shields.io/pypi/v/harness-evolve)](https://pypi.org/project/harness-evolve/)
 
 Improve an AI agent's harness (its prompts, tool descriptions and settings) from the agent's own failure
 traces, and keep a change only when it beats measured run-to-run noise.
@@ -38,8 +38,8 @@ The example is a small math agent (a calculator tool and a submit tool) on GSM-H
 with large, awkward numbers that leave room to improve.
 
 ```bash
-git clone https://github.com/sidreddy88/harness-evolve && cd harness-evolve
-pip install -e ".[litellm]"
+pip install "harness-evolve[litellm]"        # the library and the harness-evolve command
+git clone https://github.com/sidreddy88/harness-evolve && cd harness-evolve   # for the example
 python examples/math_agent/fetch_data.py      # downloads 80 problems
 export TOGETHER_API_KEY=...                   # or any litellm provider; set MODEL to match
 harness-evolve run examples/math_agent/config.py --run-dir runs/math-1 --budget 2
