@@ -913,8 +913,8 @@ class Optimizer:
         entry = next((e for e in self.history.entries() if e.candidate_id == ids[i] and e.outcome == "accepted"),
                      None)
         component, hypothesis = (entry.component, entry.hypothesis) if entry else ("unknown", "")
-        p["next"] = i + 1
         if not files or set(files) & later:
+            p["next"] = i + 1
             p["kept"].append(ids[i])
             self.history.append(HistoryEntry(state.round, ids[i], component, hypothesis, "", "prune_kept",
                                              "not tested: a later accepted edit changed the same files"))
@@ -934,6 +934,7 @@ class Optimizer:
                    ([f"cost rose {dC:+.1%}, beyond the cost band {cost_band:.1%}"] if dC > cost_band else []) + \
                    [f"guard case {g} broke" for g in broken]
         diff = candidates.diff(self.run.incumbent_dir, pruned_dir)
+        p["next"] = i + 1                  # only now: a stop during the evaluation retries this edit
         if problems:
             p["kept"].append(ids[i])
             outcome, reason = "prune_kept", "needed: without it " + "; ".join(problems)

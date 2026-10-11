@@ -101,3 +101,22 @@ def test_prune_off_keeps_every_accepted_edit_and_resume_mid_prune_pays_nothing_t
     ev2 = SubsumedEvaluator()
     again = asyncio.run(_opt(other, ev2, two_edit_proposer(), prune=True).run_until_stopped())
     assert again.prune["removed"] == ["r1"] and ev2.calls == 0
+
+
+def test_a_stop_during_a_prune_evaluation_retries_that_edit(tmp_path):
+    from harness_evolve.evaluator import ProviderFailure
+
+    class FailsOnce(SubsumedEvaluator):
+        failed = False
+
+        async def evaluate(self, harness_dir, case_ids, trials):
+            h = Path(harness_dir)
+            if h.name.startswith("prune-") and not FailsOnce.failed:
+                FailsOnce.failed = True
+                raise ProviderFailure("credit balance is too low")
+            return await super().evaluate(harness_dir, case_ids, trials)
+
+    first = asyncio.run(_opt(tmp_path, FailsOnce(), two_edit_proposer(), prune=True).run_until_stopped())
+    assert first.phase == "prune" and first.prune["next"] == 0
+    again = asyncio.run(_opt(tmp_path, FailsOnce(), two_edit_proposer(), prune=True).run_until_stopped())
+    assert again.prune["removed"] == ["r1"] and again.phase == "done"
