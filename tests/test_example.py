@@ -24,6 +24,7 @@ def _resp(tool_calls=None, content=""):
 
 @pytest.fixture
 def example(tmp_path, monkeypatch):
+    pytest.importorskip("litellm")      # the example's agent uses litellm; the core package doesn't
     problems = [{"id": f"p{i}", "question": f"What is {i} + {i}?", "answer": 2 * i} for i in range(60)]
     data = tmp_path / "problems.jsonl"
     data.write_text("".join(json.dumps(p) + "\n" for p in problems))
