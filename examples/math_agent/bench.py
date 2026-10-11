@@ -16,9 +16,12 @@ Known-answer scenarios (scripted proposer and critic, so they test the acceptanc
 Open scenarios (real proposer and critic, reported):
   find-flaw     the planted-flaw harness: does the proposer find the problem from trajectories alone?
   standard      the normal harness on 200 problems: held-out gain, cost, what was accepted.
+
+BENCH_CONFIRM=1 turns on confirm-before-accept in every scenario (for A/B runs into a separate --out).
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -31,6 +34,7 @@ from harness_evolve.bench import ACCEPTED, NOT_ACCEPTED, Scenario, scripted_llm 
 
 PROBLEMS = HERE / "data" / "problems-bench.jsonl"
 FLAWED = HERE / "bench_harnesses" / "max_turns_1"
+CONFIRM = os.environ.get("BENCH_CONFIRM") == "1"
 
 GOOD_FIX = {"component": "settings", "hypothesis": "runs end after one turn, before submitting; allow more turns",
             "edits": [{"file": "settings.json", "find": '"max_turns": 1', "replace": '"max_turns": 8'}]}
@@ -48,7 +52,7 @@ NEUTRAL_EDIT = {"component": "prompts", "hypothesis": "neutral rewording (false-
 def _kat(edit: dict, harness: Path | None = None):
     return lambda run_dir: config.build(run_dir, budget_usd=3.0, rounds=1, harness_dir=harness,
                                         problems=PROBLEMS, n_evolve=100, heldout=False,
-                                        proposer_llm=scripted_llm(edit), critic_llm=scripted_llm(edit))
+                                        proposer_llm=scripted_llm(edit), critic_llm=scripted_llm(edit), confirm=CONFIRM)
 
 
 def scenarios() -> list[Scenario]:
@@ -61,8 +65,8 @@ def scenarios() -> list[Scenario]:
                  _kat(NEUTRAL_EDIT), NOT_ACCEPTED),
         Scenario("find-flaw", "planted flaw (max_turns 1) with the real proposer and critic, 2 rounds: reported",
                  lambda run_dir: config.build(run_dir, budget_usd=5.0, rounds=2, harness_dir=FLAWED,
-                                              problems=PROBLEMS, n_evolve=100)),
+                                              problems=PROBLEMS, n_evolve=100, confirm=CONFIRM)),
         Scenario("standard", "normal harness, 200 evolve problems, real proposer and critic, 3 rounds: reported",
                  lambda run_dir: config.build(run_dir, budget_usd=6.0, rounds=3,
-                                              problems=PROBLEMS, n_evolve=200)),
+                                              problems=PROBLEMS, n_evolve=200, confirm=CONFIRM)),
     ]

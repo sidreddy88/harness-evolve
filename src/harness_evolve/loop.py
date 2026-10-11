@@ -137,6 +137,11 @@ class OptimizerConfig:
     pass_rate_tripwire: bool = True
     # Proposer/critic calls whose cost is unknown are allowed (and count $0).
     allow_unpriced_llm: bool = False
+    # Confirm before accepting: a candidate that passes the rules is re-measured, with the
+    # incumbent, on fresh trials (cached separately from the first measurement) and is
+    # accepted only if that independent measurement passes too. Costs two more evaluations
+    # per would-be acceptance; keeps a lucky first measurement from being accepted.
+    confirm: bool = False
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -191,6 +196,7 @@ class Optimizer:
         self.publisher = publisher or LocalPublisher()
         self.transfer_evaluator = transfer_evaluator
         self.history = EditHistory(self.run.root / "history.jsonl")
+        self._key_tag = ""        # "c" while confirming: fresh trials, cached separately
 
     # ---- lifecycle ----------------------------------------------------------
 
@@ -331,6 +337,8 @@ class Optimizer:
             await self._evaluate_candidate(state, budget)
         elif state.phase == "decide":
             self._decide(state)
+        elif state.phase == "confirm":
+            await self._confirm(state, budget)
         elif state.phase == "transfer":
             await self._transfer(state, budget)
         else:
@@ -355,7 +363,7 @@ class Optimizer:
     # ---- evaluation, cached per case ----------------------------------------
 
     def _case_key(self, harness_dir: Path, trials: int, case: str) -> str:
-        return f"{candidates.content_hash(harness_dir)}/k{trials}/{case}"
+        return f"{candidates.content_hash(harness_dir)}/k{trials}{self._key_tag}/{case}"
 
     def _per_case_estimate(self) -> float:
         """Mean measured cost of one trial of one case so far, for budget reservations.
@@ -578,14 +586,17 @@ class Optimizer:
         for case, record in records:
             self._record_health(state, case, record)
 
-    def _eval_ref(self, harness_dir: Path, trials: int) -> dict:
-        return {"hash": candidates.content_hash(harness_dir), "trials": trials,
-                "cases": self.cfg.evolve_cases + self.cfg.guard_cases}
+    def _eval_ref(self, harness_dir: Path, trials: int, tag: str = "") -> dict:
+        ref = {"hash": candidates.content_hash(harness_dir), "trials": trials,
+               "cases": self.cfg.evolve_cases + self.cfg.guard_cases}
+        if tag:
+            ref["tag"] = tag
+        return ref
 
     def _load_ref(self, ref: dict) -> tuple[EvalResult, list[dict]]:
         per_case, trajs = {}, []
         for case in ref["cases"]:
-            data = self.run.load_eval(f"{ref['hash']}/k{ref['trials']}/{case}")
+            data = self.run.load_eval(f"{ref['hash']}/k{ref['trials']}{ref.get('tag', '')}/{case}")
             per_case[case] = CaseResult(**data["case"])
             trajs.extend(data["trajectories"])
         return EvalResult(per_case), trajs
@@ -800,16 +811,52 @@ class Optimizer:
         cand = state.candidate
         inc_result, _ = self._load_ref(json.loads(state.incumbent_eval))
         cand_result, _ = self._load_ref(json.loads(cand["eval"]))
-        base = AcceptanceConfig(**self.cfg.acceptance)
-        acfg = replace(base, delta=state.delta, guard_cases=tuple(self.cfg.guard_cases),
-                       max_escalation_rise=max(base.max_escalation_rise, state.delta_esc or 0.0),
-                       cost_delta=(state.delta_cost or 0.0) if self.cfg.cost_band else 0.0)
-        d = decide(inc_result, cand_result, state.S_star, acfg)
+        d = decide(inc_result, cand_result, state.S_star, self._acceptance_config(state))
+        if d.accept and self.cfg.confirm:
+            cand["decision"] = d.to_json()          # resumable: the confirm phase finishes it
+            state.phase = "confirm"
+            return
         if d.accept and self.transfer_evaluator is not None and self.cfg.transfer_cases:
             cand["decision"] = d.to_json()          # resumable: the transfer phase finishes it
             state.phase = "transfer"
             return
         self._finish_decision(state, d)
+
+    def _acceptance_config(self, state: RunState) -> AcceptanceConfig:
+        base = AcceptanceConfig(**self.cfg.acceptance)
+        return replace(base, delta=state.delta, guard_cases=tuple(self.cfg.guard_cases),
+                       max_escalation_rise=max(base.max_escalation_rise, state.delta_esc or 0.0),
+                       cost_delta=(state.delta_cost or 0.0) if self.cfg.cost_band else 0.0)
+
+    async def _confirm(self, state: RunState, budget: Budget) -> None:
+        """Re-measure the incumbent and a would-be winner on fresh trials and accept only if
+        this independent measurement passes the same rules (the floor uses the incumbent's
+        fresh score). A lucky first measurement then has to be lucky twice."""
+        cand = state.candidate
+        cases = self.cfg.evolve_cases + self.cfg.guard_cases
+        self._key_tag = "c"
+        try:
+            inc_res, _ = await self._evaluate(state, budget, self.run.incumbent_dir, cases, self.cfg.trials)
+            cand_res, _ = await self._evaluate(state, budget, Path(cand["dir"]), cases, self.cfg.trials)
+        finally:
+            self._key_tag = ""
+        first = Decision(**cand["decision"])
+        second = decide(inc_res, cand_res, inc_res.S, self._acceptance_config(state))
+        cand["confirm"] = {"accept": second.accept, "delta_S": second.delta_S,
+                           "delta_C": second.delta_C, "reason": second.reason}
+        if not second.accept:
+            first.accept = False
+            first.reason = (f"not confirmed on fresh trials: {second.reason}; "
+                            f"first measurement: {first.reason}")
+            self._finish_decision(state, first)
+            return
+        first.reason += (f"; confirmed on fresh trials (dS {second.delta_S:+.3f}, "
+                         f"dC {second.delta_C:+.1%})")
+        if self.transfer_evaluator is not None and self.cfg.transfer_cases:
+            cand["decision"] = first.to_json()
+            state.phase = "transfer"
+            return
+        self._finish_decision(state, first)
 
     async def _transfer(self, state: RunState, budget: Budget) -> None:
         """Second-model check for a candidate the primary model accepted."""
@@ -841,6 +888,7 @@ class Optimizer:
         diff = candidates.diff(self.run.incumbent_dir, cand_dir)
         spent = sum(r.cost_usd for r in cand_result.per_case.values())
         outcome = ("accepted" if d.accept else
+                   "unconfirmed" if d.reason.startswith("not confirmed on fresh trials") else
                    "transfer_rejected" if d.vetoes and "second-model" in d.reason else
                    "near_miss" if d.near_miss else "rejected")
         self.history.append(HistoryEntry(

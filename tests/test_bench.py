@@ -87,3 +87,13 @@ def test_scripted_llm_answers_proposer_and_critic():
     llm = scripted_llm({"component": "settings", "hypothesis": "h", "edits": []}, critic_accepts=False)
     assert json.loads(asyncio.run(llm("You are a strict reviewer ...", "x")))["verdict"] == "reject"
     assert json.loads(asyncio.run(llm("You improve the harness ...", "x")))["component"] == "settings"
+
+
+def test_known_answers_hold_with_confirm(bench_spec, tmp_path, monkeypatch):
+    from harness_evolve import bench
+
+    monkeypatch.setattr(bench_spec, "CONFIRM", True)
+    kats = [s for s in bench_spec.scenarios() if s.expect is not None]
+    by = {r["name"]: r for r in asyncio.run(bench.run(kats, tmp_path / "bench"))}
+    assert all(r["passed"] for r in by.values())
+    assert "confirmed on fresh trials" in by["accept-good"]["rounds"][0]["reason"]

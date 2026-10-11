@@ -46,6 +46,7 @@ content hash, so a stopped run resumes without paying twice.
 | Cost only on shared successes | Compare cost only on cases both harnesses solve, so a cheaper failure never counts as a saving (`cost_on_shared_successes`, off by default) | Idea from the Hugging Face / FineEnvs "Multi-harness RL" article: efficiency is rewarded only on correct answers |
 | Near-miss archive | Candidates just inside the noise band are kept and shown to later rounds to build on (`near_miss_fraction`, off by default) | Idea from the Darwin Gödel Machine (arXiv 2505.22954) and Huxley-Gödel Machine (arXiv 2510.21614): the best-scoring variant isn't always the best one to build on |
 | Two-model check | An accepted edit must also hold on a second model's evaluation (`transfer_evaluator`, optional) | Ours, motivated by our finding that a prompt edit evolved for one model did nothing on another |
+| Confirm before accepting | A candidate that passes the rules is measured again on fresh trials (incumbent and candidate, same cases); it is accepted only if that second, independent measurement passes the rules too. Costs one more evaluation per would-be acceptance, and removes acceptances that rested on one lucky measurement (`confirm`, off by default) | Ours; the same idea as a confirmation run before shipping an A/B result |
 | Exploration rule | After N rejected candidates in a row, the next must change a component family none of them touched (`diversity_after`, off by default) | Simplified from RRSI's component novelty |
 
 ## Reporting (`report.py`, `pass_k.py`)

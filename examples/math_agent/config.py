@@ -42,9 +42,9 @@ PROFILE = AgentProfile.build(
 
 def build(run_dir: str | Path, budget_usd: float = 2.0, rounds: int = 3, *,
           harness_dir: Path | None = None, problems: Path | None = None, n_evolve: int = 50,
-          heldout: bool = True, proposer_llm=None, critic_llm=None) -> Optimizer:
+          heldout: bool = True, proposer_llm=None, critic_llm=None, confirm: bool = False) -> Optimizer:
     """The example's optimizer. Keyword options are for the benchmark (bench.py): another starting
-    harness, a larger problem set, scripted proposer/critic, no held-out phase."""
+    harness, a larger problem set, scripted proposer/critic, no held-out phase, confirm-before-accept."""
     problems = Path(problems or PROBLEMS)
     if not problems.exists():
         raise SystemExit(f"no data at {problems}: run `python {HERE / 'fetch_data.py'}` first")
@@ -56,7 +56,7 @@ def build(run_dir: str | Path, budget_usd: float = 2.0, rounds: int = 3, *,
         evolve_cases=evolve, guard_cases=[], final_cases=held if heldout else [], final_trials=3,
         budget_usd=budget_usd, max_rounds=rounds, trials=2, calibration_trials=2,
         default_case_cost_usd=0.003, cost_band=True, allow_unpriced_llm=proposer_llm is not None,
-        parallel_lanes=8, case_lanes={c: c for c in ids})
+        parallel_lanes=8, case_lanes={c: c for c in ids}, confirm=confirm)
     llm = litellm_llm(PROPOSER_MODEL, prices=PRICES if PROPOSER_MODEL == MODEL else None)
     return Optimizer(run_dir, Path(harness_dir or HERE / "harness"), cfg,
                      evaluator=MathEvaluator(problems, MODEL, PRICES),
