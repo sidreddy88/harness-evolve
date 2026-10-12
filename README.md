@@ -32,10 +32,20 @@ did a three-round run on the same project's fix agent: every candidate edit eith
 noise band or broke a guard case. Halfway through that run, one edit led 7 to 4, and a single
 measurement would have reported it as a gain.
 
-## Quickstart
+## Quickstart: the math example
 
-The example is a small math agent (a calculator tool and a submit tool) on GSM-Hard, GSM8K questions
-with large, awkward numbers that leave room to improve.
+The example (`examples/math_agent/`) is a small math agent (a calculator tool and a submit tool) on
+GSM-Hard, GSM8K questions with large, awkward numbers that leave room to improve. Everything that shapes
+its behaviour is in `examples/math_agent/harness/`, the directory the optimizer edits:
+
+- prompts: `system.prompt`, `task.prompt`, `nudge.prompt` (sent when a reply has no tool call),
+  `remind.prompt` (stuck reminder), `plan.prompt` (planning step)
+- `tool_descriptions.json`: what the model is told each tool does
+- `settings.json`: `max_turns`, `nudges`, stuck detection (`remind_after`, `stop_after`), and two
+  structural switches, `plan` (off/on) and `calculator` (on/off)
+
+`config.py` declares the profile (setting bounds and switches), the evaluator and the case split;
+`bench.py` holds the benchmark scenarios built on it (see Benchmarking the optimizer below).
 
 ```bash
 pip install "harness-evolve[litellm]"        # the library and the harness-evolve command
@@ -47,7 +57,8 @@ harness-evolve status runs/math-1
 harness-evolve diff runs/math-1               # accepted edits, as diffs to review
 ```
 
-What to expect (our run, DeepSeek-V4.1-Flash, $1.06): the starting harness solved 76% of the 50 evolve
+What to expect (our run, DeepSeek-V4.1-Flash, $1.06, before the stuck-detection settings and switches
+were added): the starting harness solved 76% of the 50 evolve
 problems, with a measured noise band of ±5.6 points. The proposer read the trajectories and aimed three
 edits at real failures (runs that never submit an answer, then wrong arithmetic); each gained +2 to +3
 points, inside the noise, so none was accepted. With 50 cases only bigger gains are detectable; more
