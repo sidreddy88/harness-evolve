@@ -43,7 +43,7 @@ PROFILE = AgentProfile.build(
 def build(run_dir: str | Path, budget_usd: float = 2.0, rounds: int = 3, *,
           harness_dir: Path | None = None, problems: Path | None = None, n_evolve: int = 50,
           heldout: bool = True, proposer_llm=None, critic_llm=None, confirm: bool = False,
-          prune: bool = False) -> Optimizer:
+          prune: bool = False, max_stall: int = 3) -> Optimizer:
     """The example's optimizer. Keyword options are for the benchmark (bench.py): another starting
     harness, a larger problem set, scripted proposer/critic, no held-out phase, confirm-before-accept, pruning."""
     problems = Path(problems or PROBLEMS)
@@ -55,7 +55,7 @@ def build(run_dir: str | Path, budget_usd: float = 2.0, rounds: int = 3, *,
     evolve, held = ids[:n_evolve], ids[n_evolve:]
     cfg = OptimizerConfig(
         evolve_cases=evolve, guard_cases=[], final_cases=held if heldout else [], final_trials=3,
-        budget_usd=budget_usd, max_rounds=rounds, trials=2, calibration_trials=2,
+        budget_usd=budget_usd, max_rounds=rounds, max_stall=max_stall, trials=2, calibration_trials=2,
         default_case_cost_usd=0.003, cost_band=True, allow_unpriced_llm=proposer_llm is not None,
         parallel_lanes=8, case_lanes={c: c for c in ids}, confirm=confirm, prune=prune)
     llm = litellm_llm(PROPOSER_MODEL, prices=PRICES if PROPOSER_MODEL == MODEL else None)

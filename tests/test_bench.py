@@ -99,3 +99,12 @@ def test_known_answers_hold_with_confirm(bench_spec, tmp_path, monkeypatch):
     by = {r["name"]: r for r in asyncio.run(bench.run(kats, tmp_path / "bench"))}
     assert all(r["passed"] for r in by.values())
     assert "confirmed on fresh trials" in by["accept-good"]["rounds"][0]["reason"]
+
+
+def test_noise_many_runs_every_round_and_a_deterministic_agent_accepts_nothing(bench_spec, tmp_path):
+    from harness_evolve import bench
+
+    (sc,) = [s for s in bench_spec.scenarios() if s.name == "noise-many"]
+    (r,) = asyncio.run(bench.run([sc], tmp_path / "bench"))
+    assert r["phase"] == "done" and len(r["rounds"]) == 40 and r["accepted"] == []
+    assert len({x["hypothesis"] for x in r["rounds"]}) == 40
