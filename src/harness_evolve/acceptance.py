@@ -217,7 +217,8 @@ def calibrate_cost_delta(trial_costs: dict[str, tuple[float, float]], z: float =
 
 
 def calibrate_delta(trial_pairs: dict[str, tuple[bool, bool]], z: float = 2.0,
-                    trials_per_eval: int = 1, reps: int = 2000, seed: int = 7) -> float:
+                    trials_per_eval: int = 1, reps: int = 2000, seed: int = 7,
+                    min_flips: float = 3.0) -> float:
     """Noise band from two trials of the SAME harness on each case.
 
     The null difference of two independent evaluations is observed directly:
@@ -228,10 +229,18 @@ def calibrate_delta(trial_pairs: dict[str, tuple[bool, bool]], z: float = 2.0,
     The pairs measure single-trial evaluations. If each later evaluation
     averages `trials_per_eval` trials per case, its noise shrinks by
     sqrt(trials_per_eval), and so does delta.
+
+    Floor: if few or no pairs disagree, the bootstrap says the noise is (near)
+    zero, but zero flips in n cases only bounds the flip rate below about 3/n
+    (the rule of three, 95%). So delta is never below the band `min_flips`
+    flips in n cases would give: z * sqrt(min_flips) / n. In our benchmark a
+    round 0 where all 100 pairs agreed gave delta = 0; other runs of the same
+    harness flipped 2-4 cases in 100. min_flips = 0 turns the floor off.
     """
     diffs = [float(a) - float(b) for a, b in trial_pairs.values()]
     if len(diffs) < 2:
         raise ValueError("need at least 2 cases with two trials each to calibrate")
     rng = random.Random(seed)
     boot = [statistics.fmean(rng.choice(diffs) for _ in diffs) for _ in range(reps)]
-    return z * statistics.pstdev(boot) / trials_per_eval ** 0.5
+    floor = z * min_flips ** 0.5 / len(diffs)
+    return max(statistics.pstdev(boot) * z, floor) / trials_per_eval ** 0.5

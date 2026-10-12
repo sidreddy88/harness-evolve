@@ -74,7 +74,7 @@ def test_floor_rejects_a_slide_below_best_so_far():
 
 def test_calibrated_delta_is_zero_for_identical_trials_and_shrinks_with_k():
     same = {f"c{i}": (True, True) for i in range(10)}
-    assert calibrate_delta(same) == 0.0
+    assert calibrate_delta(same, min_flips=0) == 0.0
     noisy = {f"c{i}": (i % 2 == 0, i % 3 == 0) for i in range(12)}
     d1, d2 = calibrate_delta(noisy), calibrate_delta(noisy, trials_per_eval=2)
     assert d1 > 0 and d2 == pytest.approx(d1 / 2 ** 0.5)
@@ -795,3 +795,11 @@ def test_evidence_keeps_details_that_carry_no_answer():
 
     assert evidence.outcome(_failing_rec("no answer submitted")) == "FAIL: no answer submitted"
     assert evidence.outcome(_failing_rec("matched src/right_fix.py", "PASS")) == "PASS"
+
+
+def test_noise_band_has_a_floor_when_no_pair_disagrees():
+    same = {f"c{i}": (True, True) for i in range(100)}
+    d = calibrate_delta(same, trials_per_eval=2)
+    assert d == pytest.approx(2 * 3 ** 0.5 / 100 / 2 ** 0.5)          # ~0.0245, as if 3 cases had flipped
+    many = {f"c{i}": (i % 2 == 0, i % 3 == 0) for i in range(100)}  # plenty of flips: floor doesn't bind
+    assert calibrate_delta(many) == calibrate_delta(many, min_flips=0)
