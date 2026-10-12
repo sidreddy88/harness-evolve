@@ -38,6 +38,7 @@ content hash, so a stopped run resumes without paying twice.
 | Rule | How | Source |
 |---|---|---|
 | Noise band | δ = 2 × the bootstrapped standard deviation of the pass-rate change between two runs of the unchanged harness (round 0's trial pairs) | RRSI (`calibrate.py`) |
+| Noise band floor | δ is never below the band 3 flipped cases in n would give (2·√3 / n before the trials adjustment): zero observed flips only bounds the flip rate below about 3/n. One benchmark round 0 had all 100 pairs agree and calibrated δ = 0, while the same harness flipped 2–4 of 100 in other runs. On 13 saved runs the floor changed no decision (`min_flips` in `calibrate_delta`) | The rule of three (standard statistics); ours to apply it here |
 | Floor | Never accept a candidate clearly worse than the best so far: S′ ≥ S* − δ | RRSI |
 | Clear gain | A gain beyond δ may cost more, up to 10% plus 44.5% per point gained | RRSI's coding settings (β₀ = 0.10, β₁ = 44.5) |
 | Inside the band | A score change counts for nothing (w_s = 0); the candidate wins only if it is cheaper by more than the cost noise band | RRSI (w_s = 0); the cost band is ours, calibrated the same way from trial-pair costs (`cost_band`, off by default) |
