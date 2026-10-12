@@ -37,6 +37,10 @@ PROFILE = AgentProfile.build(
     constraints="Edits must help on any arithmetic word problem, not on particular questions or numbers.",
     gaming_examples="E.g. telling the agent to round answers so near-misses count as correct.",
     setting_bounds={"max_turns": (3, 16), "nudges": (0, 3), "remind_after": (1, 12), "stop_after": (1, 12)},
+    switches={"plan": {"off": "solves directly",
+                       "on": "first writes a plan of the steps (one extra model call, no tools), then solves"},
+              "calculator": {"on": "has the calculator tool for arithmetic",
+                             "off": "no calculator tool; does the arithmetic itself"}},
     grader=TrajectoryGrader())
 
 

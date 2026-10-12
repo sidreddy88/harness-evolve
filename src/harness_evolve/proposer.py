@@ -52,8 +52,13 @@ def settings_table(harness_dir: Path) -> str:
     raw = _json.loads((Path(harness_dir) / "settings.json").read_text())
     docs = raw.get("_doc", {})
     lines = []
+    switches = _profile().switches
     for key, value in raw.items():
         if key.startswith("_"):
+            continue
+        if key in switches:
+            opts = "; ".join(f"{o!r}: {what}" for o, what in switches[key].items())
+            lines.append(f"- {key} = {value!r} [STRUCTURAL SWITCH] {docs.get(key, '')} Options: {opts}")
             continue
         bounds = _profile().setting_bounds.get(key)
         if isinstance(bounds, frozenset):

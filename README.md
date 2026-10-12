@@ -184,7 +184,16 @@ in a row on a small evolve set (20 problems), so measurement noise is large ($3.
 its first measurement (18% cheaper, beyond the 15.4% cost band), a false accept with confirm off; on fresh
 trials it was 10% more expensive, and confirm rejected it. The other 39 were rejected outright. No pass-rate
 change came near the noise band (largest +0.05 against 0.12): on a small evolve set, false accepts come from
-cost noise. Write your own scenarios with `harness_evolve.bench.Scenario`
+cost noise.
+
+Structural switches (`switches` in `AgentProfile.build`: settings with named options, such as a planning
+step on or off, which the proposer is told to check before rewording) were tested with the example's
+`plan` and `calculator` switches ($7.50):
+
+| Scenario | Result |
+|---|---|
+| find-switch: starts with `plan` on (an extra model call per problem), real proposer | round 1 switched `plan` off: 22% cheaper on the evolve set, pass rate within noise; held-out 80.4% → 79.0% (within noise) at 34% lower cost per run, though runs that never submit rose from 2.3% to 5.6% |
+| standard with switches, real proposer, 3 rounds | round 1 tried a switch first (`plan` on: +0.75 points at +41% cost, rejected); a tool-description edit and more nudges were rejected too; nothing accepted | Write your own scenarios with `harness_evolve.bench.Scenario`
 and `scripted_llm` (see `examples/math_agent/bench.py`).
 
 ## Limits

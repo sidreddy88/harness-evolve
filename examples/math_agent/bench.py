@@ -19,6 +19,8 @@ Known-answer scenarios (scripted proposer and critic, so they test the acceptanc
 Open scenarios (real proposer and critic, reported):
   find-flaw     the planted-flaw harness: does the proposer find the problem from trajectories alone?
   find-threshold  the stop_after = 1 harness with the real proposer: does it find a too-tight threshold?
+  find-switch   starts with the structural switch plan = "on" (an extra planning call per problem, so
+                more cost); real proposer, 2 rounds: does it check the switch? Reported.
   noise-many    40 scripted neutral rewordings of the system prompt in a row, on 20 evolve problems, with
                 confirm on. Every candidate that passes its first measurement is a false accept confirm-off
                 would have made; the fresh trials then confirm it or catch it (`unconfirmed`). Reported.
@@ -44,6 +46,7 @@ from harness_evolve.bench import ACCEPTED, NOT_ACCEPTED, Scenario, scripted_llm 
 PROBLEMS = HERE / "data" / "problems-bench.jsonl"
 FLAWED = HERE / "bench_harnesses" / "max_turns_1"
 TIGHT = HERE / "bench_harnesses" / "stop_after_1"
+PLAN_ON = HERE / "bench_harnesses" / "plan_on"
 CONFIRM = os.environ.get("BENCH_CONFIRM") == "1"
 PRUNE = os.environ.get("BENCH_PRUNE") == "1"
 
@@ -111,6 +114,9 @@ def scenarios() -> list[Scenario]:
                                               problems=PROBLEMS, n_evolve=100, confirm=CONFIRM, prune=PRUNE)),
         Scenario("find-threshold", "planted flaw (stop_after 1) with the real proposer and critic, 2 rounds: reported",
                  lambda run_dir: config.build(run_dir, budget_usd=5.0, rounds=2, harness_dir=TIGHT,
+                                              problems=PROBLEMS, n_evolve=100, confirm=CONFIRM, prune=PRUNE)),
+        Scenario("find-switch", "starts with plan = on (extra call per problem), real proposer, 2 rounds: reported",
+                 lambda run_dir: config.build(run_dir, budget_usd=5.0, rounds=2, harness_dir=PLAN_ON,
                                               problems=PROBLEMS, n_evolve=100, confirm=CONFIRM, prune=PRUNE)),
         Scenario("noise-many", "40 scripted neutral rewordings, 20 evolve problems, confirm on: reported",
                  _noise_many),
