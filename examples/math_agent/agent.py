@@ -7,6 +7,10 @@ Tools: calculator(expression) and submit_answer(answer). The run ends when the
 agent submits, runs out of turns, stops calling tools after its nudges, or makes
 more calculator calls than stop_after (stuck detection: after remind_after calls
 it is reminded to submit). Harnesses without these settings have no limit.
+
+Structural switches (settings with named options): plan = "on" adds one model call
+without tools before solving, asking for a plan (plan.prompt), which then stays in
+the conversation; calculator = "off" removes the calculator tool.
 """
 from __future__ import annotations
 
@@ -40,11 +44,12 @@ def calculate(expression: str) -> float:
 
 
 def _tools(h) -> list[dict]:
-    return [
+    calc = [] if h.settings.get("calculator", "on") == "off" else [
         {"type": "function", "function": {
             "name": "calculator", "description": h.tool_description("calculator"),
             "parameters": {"type": "object", "properties": {"expression": {"type": "string"}},
-                           "required": ["expression"]}}},
+                           "required": ["expression"]}}}]
+    return calc + [
         {"type": "function", "function": {
             "name": "submit_answer", "description": h.tool_description("submit_answer"),
             "parameters": {"type": "object", "properties": {"answer": {"type": "number"}},
@@ -70,6 +75,15 @@ async def solve(question: str, harness_dir, model: str, prices: tuple[float, flo
     run, nudges = Run(), int(h.setting("nudges"))
     remind_after, stop_after = h.settings.get("remind_after"), h.settings.get("stop_after")
     calc_calls, stopped = 0, False
+    if h.settings.get("plan", "off") == "on":
+        run.turns += 1
+        resp = await litellm.acompletion(model=model, messages=messages + [
+            {"role": "user", "content": h.render("plan")}], max_tokens=4000)
+        u = resp.usage
+        run.cost_usd += (u.prompt_tokens * prices[0] + u.completion_tokens * prices[1]) / 1e6
+        plan = resp.choices[0].message.content or ""
+        messages += [{"role": "user", "content": h.render("plan")}, {"role": "assistant", "content": plan}]
+        run.steps.append({"name": "plan", "input": {}, "output": plan[:2000]})
     for _ in range(int(h.setting("max_turns"))):
         run.turns += 1
         resp = await litellm.acompletion(model=model, messages=messages, tools=_tools(h), max_tokens=4000)

@@ -104,3 +104,27 @@ def test_stuck_detection_reminds_then_stops(example, tmp_path, monkeypatch):
     outs = [st["output"] for st in run.steps]
     assert run.answer is None and run.turns == 4 and len(outs) == 4
     assert "submit_answer" not in outs[0] and "2 times" in outs[1] and outs[3].startswith("Stopped")
+
+
+def test_switches_plan_adds_a_call_and_calculator_off_removes_the_tool(example, tmp_path, monkeypatch):
+    import shutil
+
+    import agent
+    import litellm
+
+    seen = []
+
+    async def fake(model, messages, tools=None, **kw):
+        seen.append(tools)
+        if tools is None:
+            return _resp(content="1. add the numbers")
+        return _resp([("submit_answer", {"answer": 2})])
+    monkeypatch.setattr(litellm, "acompletion", fake)
+    h = tmp_path / "h"
+    shutil.copytree(EXAMPLE / "harness", h)
+    s = json.loads((h / "settings.json").read_text())
+    s.update(plan="on", calculator="off")
+    (h / "settings.json").write_text(json.dumps(s))
+    run = asyncio.run(agent.solve("What is 1 + 1?", h, "m", (0.0, 0.0)))
+    assert run.answer == 2 and run.turns == 2 and run.steps[0]["name"] == "plan"
+    assert seen[0] is None and [t["function"]["name"] for t in seen[1]] == ["submit_answer"]

@@ -1,0 +1,16 @@
+{
+ "_doc": {
+  "max_turns": "model calls allowed per problem before the run ends without an answer",
+  "nudges": "times a reply with no tool call is answered with nudge.prompt instead of ending the run",
+  "remind_after": "calculator calls after which each result also reminds the agent to submit (remind.prompt)",
+  "stop_after": "calculator calls allowed before the run is stopped without an answer (stuck detection)",
+  "plan": "whether the agent writes a plan before solving",
+  "calculator": "whether the agent has the calculator tool"
+ },
+ "max_turns": 8,
+ "nudges": 1,
+ "remind_after": 5,
+ "stop_after": 8,
+ "plan": "on",
+ "calculator": "on"
+}

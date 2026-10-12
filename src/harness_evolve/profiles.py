@@ -5,7 +5,16 @@ The loop, acceptance rules, budget, state, history and report are the same for
 every agent. A profile supplies the rest: where the harness lives, what the
 agent does (so the proposer and critic understand it), which mechanisms must
 never be weakened, which files each component may edit, allowed ranges for
-settings, and optionally a trajectory grader and health thresholds.
+settings, structural switches, and optionally a trajectory grader and health
+thresholds.
+
+Switches are settings that change how the agent works rather than what it is
+told (planning step on/off, a tool on/off, how much history it sees): each has
+named options, documented by what they do. The proposer is told to check them
+before rewording prompts. Our evidence (the r9 fix-agent run): a control-flow
+change transferred to a second model and a wording change didn't; arXiv
+2609.20804 found such components help or hurt depending on the model and task,
+so they are worth searching per agent rather than fixing once.
 
     from harness_evolve import AgentProfile, profiles
     profile = AgentProfile.build(
@@ -64,7 +73,7 @@ Settings are behaviour, not just numbers: read the SETTINGS section for what eac
 does and its allowed range. Do not re-propose an idea from REJECTED IDEAS unless the
 evidence shows something new, and then say what.
 
-Return STRICT JSON only:
+{switches}Return STRICT JSON only:
 {{"candidates": [
    {{"component": one of {components},
     "hypothesis": "what failure/waste this fixes and why the edit should fix it",
@@ -74,6 +83,14 @@ Return STRICT JSON only:
  "preferred": 0 or 1,
  "why": "why the preferred one should help more"}}
 Each "find" must occur exactly once in its file."""
+
+SWITCHES_TEXT = """Some settings are STRUCTURAL SWITCHES (marked in the SETTINGS section): they change how
+the agent works, not what it is told. Before proposing a wording change, check whether
+switching one addresses the failure or waste in the evidence; if one does, make it one of
+your two candidates. A switch is changed by editing its value in settings.json to another
+listed option.
+
+"""
 
 CRITIC_TEMPLATE = """You are a strict reviewer of changes to an agent harness in an automated
 evolution loop. The harness is evolved against the very tasks it is measured on,
@@ -127,6 +144,7 @@ class AgentProfile:
     grader: object | None = None          # optional: .grade(traj) -> obj with .accepted; .summarize; .render
     health_baseline: dict = field(default_factory=dict)
     component_families: dict = field(default_factory=dict)   # component -> family, for the exploration rule
+    switches: dict = field(default_factory=dict)   # setting -> {option: what it does}
 
     @classmethod
     def build(cls, name: str, harness_root: str | Path, agent_description: str,
@@ -135,7 +153,8 @@ class AgentProfile:
               setting_bounds: dict | None = None,
               component_files: dict[str, Callable[[str], bool]] | None = None,
               component_families: dict | None = None, grader: object | None = None,
-              health_baseline: dict | None = None) -> AgentProfile:
+              health_baseline: dict | None = None,
+              switches: dict[str, dict[str, str]] | None = None) -> AgentProfile:
         """A profile with the proposer and critic instructions written for your agent.
 
         agent_description: what the agent does, its tools, how it finishes a task.
@@ -144,21 +163,30 @@ class AgentProfile:
         production_context: how evaluation differs from production, for the critic.
         gaming_examples: what gaming your grader would look like, for the critic.
         setting_bounds: {setting: (lo, hi)} for numbers, or frozenset({...}) of allowed values.
+        switches: {setting: {option: what the agent does with it}} for structural settings (e.g.
+            {"plan": {"off": "solves directly", "on": "writes a plan first, one extra model call"}}).
+            Their allowed values are the options; the proposer sees each option's effect.
         """
         files = component_files or DEFAULT_COMPONENT_FILES
         safety = "; ".join(safety_mechanisms) if safety_mechanisms else "the agent's checks on its own output"
         components = tuple(files)
+        switches = {k: dict(v) for k, v in (switches or {}).items()}
+        bounds = dict(setting_bounds or {})
+        for key, options in switches.items():
+            bounds[key] = frozenset(options)
         proposer = PROPOSER_TEMPLATE.format(
+            switches=SWITCHES_TEXT if switches else "",
             agent_description=agent_description.strip(), safety=safety,
             constraints=(constraints.strip() + " ") if constraints else "", components=list(components))
         critic = CRITIC_TEMPLATE.format(
             agent_description=agent_description.strip(), safety=safety,
             context=("\n" + production_context.strip() + "\n") if production_context else "",
             gaming=(" " + gaming_examples.strip()) if gaming_examples else "")
-        return cls(name=name, harness_root=Path(harness_root), setting_bounds=dict(setting_bounds or {}),
+        return cls(name=name, harness_root=Path(harness_root), setting_bounds=bounds,
                    components=components, component_files=dict(files), proposer_system=proposer,
                    critic_system=critic, grader=grader, health_baseline=dict(health_baseline or {}),
-                   component_families=dict(component_families or {c: c for c in components}))
+                   component_families=dict(component_families or {c: c for c in components}),
+                   switches=switches)
 
 
 _active: AgentProfile | None = None
