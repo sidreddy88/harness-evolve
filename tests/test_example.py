@@ -3,6 +3,7 @@ model, the proposer by a fixed edit. Checks the wiring of agent, evaluator,
 profile, config and CLI without spending anything."""
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -83,3 +84,23 @@ def test_cli_status_and_diff_on_a_missing_run(tmp_path, capsys):
     assert "no run at" in capsys.readouterr().out
     assert main(["diff", str(tmp_path / "nope")]) == 0
     assert "no accepted edits" in capsys.readouterr().out
+
+
+def test_stuck_detection_reminds_then_stops(example, tmp_path, monkeypatch):
+    import shutil
+
+    import agent
+    import litellm
+
+    async def keeps_calculating(model, messages, tools, **kw):
+        return _resp([("calculator", {"expression": "1+1"})])
+    monkeypatch.setattr(litellm, "acompletion", keeps_calculating)
+    h = tmp_path / "h"
+    shutil.copytree(EXAMPLE / "harness", h)
+    s = json.loads((h / "settings.json").read_text())
+    s.update(remind_after=2, stop_after=3, max_turns=8)
+    (h / "settings.json").write_text(json.dumps(s))
+    run = asyncio.run(agent.solve("What is 1 + 1?", h, "m", (0.0, 0.0)))
+    outs = [st["output"] for st in run.steps]
+    assert run.answer is None and run.turns == 4 and len(outs) == 4
+    assert "submit_answer" not in outs[0] and "2 times" in outs[1] and outs[3].startswith("Stopped")

@@ -169,7 +169,15 @@ Results go to `runs/bench-1/bench.md`. Our first run (DeepSeek-V4.1-Flash, $9.37
 
 The first version of reject-bad ("skip the calculator and estimate") was accepted: it didn't hurt this
 model at all and was 13% cheaper, so the optimizer was right and the test was wrong. A known-answer
-scenario's premise has to be measured, not assumed. Write your own scenarios with `harness_evolve.bench.Scenario`
+scenario's premise has to be measured, not assumed.
+
+Later scenarios test stuck-detection thresholds (`remind_after`, `stop_after` in the example's settings),
+starting from a harness that stops every run at its second calculator call ($3.89):
+
+| Scenario | Expected | Result |
+|---|---|---|
+| accept-threshold: planted flaw (`stop_after` 1) + scripted fix (8) | accepted | PASS: +9.5 points |
+| find-threshold: same flaw, real proposer | (reported) | found it from the stop messages in the trajectories and set `stop_after` to 4: held-out 71.7% → 78.5% (+6.9, 95% CI +4.0 to +10.2); within noise of rerunning the original twice | Write your own scenarios with `harness_evolve.bench.Scenario`
 and `scripted_llm` (see `examples/math_agent/bench.py`).
 
 ## Limits

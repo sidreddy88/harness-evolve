@@ -13,8 +13,12 @@ Known-answer scenarios (scripted proposer and critic, so they test the acceptanc
                 DeepSeek-V4.1-Flash at all and was 13% cheaper, so accepting it was correct: verify a
                 known-answer scenario's premise before trusting it.)
   reject-noise  a neutral rewording of the system prompt. Must not be accepted (false-accept check).
+  accept-threshold  planted flaw stop_after = 1 (stuck detection stops runs at their second calculator
+                call; 52 of 400 measured runs make 2+ calls, 34 of them correct); the scripted fix restores
+                stop_after = 8. Must be accepted.
 Open scenarios (real proposer and critic, reported):
   find-flaw     the planted-flaw harness: does the proposer find the problem from trajectories alone?
+  find-threshold  the stop_after = 1 harness with the real proposer: does it find a too-tight threshold?
   standard      the normal harness on 200 problems: held-out gain, cost, what was accepted.
 
 BENCH_CONFIRM=1 turns on confirm-before-accept and BENCH_PRUNE=1 turns on pruning of accepted edits in every
@@ -35,6 +39,7 @@ from harness_evolve.bench import ACCEPTED, NOT_ACCEPTED, Scenario, scripted_llm 
 
 PROBLEMS = HERE / "data" / "problems-bench.jsonl"
 FLAWED = HERE / "bench_harnesses" / "max_turns_1"
+TIGHT = HERE / "bench_harnesses" / "stop_after_1"
 CONFIRM = os.environ.get("BENCH_CONFIRM") == "1"
 PRUNE = os.environ.get("BENCH_PRUNE") == "1"
 
@@ -45,6 +50,8 @@ BAD_EDIT = {"component": "prompts", "hypothesis": "round answers to save effort"
                        "find": "When you are done, call submit_answer with the final number.",
                        "replace": "When you are done, round the final number to the nearest hundred and "
                                   "call submit_answer with the rounded value."}]}
+THRESHOLD_FIX = {"component": "settings", "hypothesis": "runs are stopped at their second calculator call; allow more",
+                 "edits": [{"file": "settings.json", "find": '"stop_after": 1', "replace": '"stop_after": 8'}]}
 NEUTRAL_EDIT = {"component": "prompts", "hypothesis": "neutral rewording (false-accept check)",
                 "edits": [{"file": "system.prompt",
                            "find": "You are a helpful assistant that solves math word problems.",
@@ -65,8 +72,13 @@ def scenarios() -> list[Scenario]:
                  _kat(BAD_EDIT), NOT_ACCEPTED),
         Scenario("reject-noise", "scripted neutral rewording of the system prompt: must not be accepted",
                  _kat(NEUTRAL_EDIT), NOT_ACCEPTED),
+        Scenario("accept-threshold", "planted flaw (stop_after 1) + scripted fix (stop_after 8): must be accepted",
+                 _kat(THRESHOLD_FIX, TIGHT), ACCEPTED),
         Scenario("find-flaw", "planted flaw (max_turns 1) with the real proposer and critic, 2 rounds: reported",
                  lambda run_dir: config.build(run_dir, budget_usd=5.0, rounds=2, harness_dir=FLAWED,
+                                              problems=PROBLEMS, n_evolve=100, confirm=CONFIRM, prune=PRUNE)),
+        Scenario("find-threshold", "planted flaw (stop_after 1) with the real proposer and critic, 2 rounds: reported",
+                 lambda run_dir: config.build(run_dir, budget_usd=5.0, rounds=2, harness_dir=TIGHT,
                                               problems=PROBLEMS, n_evolve=100, confirm=CONFIRM, prune=PRUNE)),
         Scenario("standard", "normal harness, 200 evolve problems, real proposer and critic, 3 rounds: reported",
                  lambda run_dir: config.build(run_dir, budget_usd=6.0, rounds=3,

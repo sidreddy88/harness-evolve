@@ -37,7 +37,8 @@ def bench_spec(tmp_path, monkeypatch):
             return _resp([("submit_answer", {"answer": round(2 * i, -2)})])
         if messages[-1]["role"] == "tool":                   # second turn: submit
             return _resp([("submit_answer", {"answer": 2 * i})])
-        return _resp([("calculator", {"expression": f"{i}+{i}"})])   # first turn: calculate
+        return _resp([("calculator", {"expression": f"{i}"}),           # first turn: two calculator calls
+                      ("calculator", {"expression": f"{i}+{i}"})])
 
     import litellm
     monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
@@ -48,13 +49,14 @@ def test_known_answer_scenarios_pass(bench_spec, tmp_path):
     from harness_evolve import bench
 
     kats = [s for s in bench_spec.scenarios() if s.expect is not None]
-    assert [s.name for s in kats] == ["accept-good", "reject-bad", "reject-noise"]
+    assert [s.name for s in kats] == ["accept-good", "reject-bad", "reject-noise", "accept-threshold"]
     results = asyncio.run(bench.run(kats, tmp_path / "bench"))
     by = {r["name"]: r for r in results}
     assert by["accept-good"]["passed"] is True and by["accept-good"]["accepted"] == ["r1"]
     assert by["accept-good"]["rounds"][0]["delta_S"] > 0.5            # 0% -> 100% in the fake
     assert by["reject-bad"]["passed"] is True and by["reject-bad"]["accepted"] == []
     assert by["reject-noise"]["passed"] is True and by["reject-noise"]["accepted"] == []
+    assert by["accept-threshold"]["passed"] is True and by["accept-threshold"]["rounds"][0]["delta_S"] > 0.5
     md = (tmp_path / "bench" / "bench.md").read_text()
     assert "| accept-good | accepted | PASS | ['r1']" in md
 
@@ -69,7 +71,7 @@ def test_partial_rerun_updates_instead_of_replacing(bench_spec, tmp_path):
     shutil.rmtree(out / "reject-bad")
     asyncio.run(bench.run(kats, out, only=["reject-bad"]))
     names = [r["name"] for r in json.loads((out / "bench.json").read_text())]
-    assert names == ["accept-good", "reject-bad", "reject-noise"]
+    assert names == ["accept-good", "reject-bad", "reject-noise", "accept-threshold"]
 
 
 def test_judge_rules():
