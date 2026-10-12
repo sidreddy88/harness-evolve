@@ -1,6 +1,7 @@
 """
 harness-evolve command line.
 
+    harness-evolve init my-agent          # a starter project to fill in
     harness-evolve run CONFIG.py --run-dir runs/r1 [--budget 5] [--rounds 3]
     harness-evolve status runs/r1
     harness-evolve diff runs/r1
@@ -66,6 +67,9 @@ def _status(run_dir: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="harness-evolve")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    i = sub.add_parser("init", help="write a starter project for your agent")
+    i.add_argument("directory", type=Path)
+    i.add_argument("--force", action="store_true", help="overwrite existing starter files")
     r = sub.add_parser("run", help="start or resume a run")
     r.add_argument("config", type=Path)
     r.add_argument("--run-dir", type=Path, required=True)
@@ -81,6 +85,15 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--only", help="comma-separated scenario names")
     args = ap.parse_args(argv)
 
+    if args.cmd == "init":
+        from harness_evolve import scaffold
+        try:
+            written = scaffold.write(args.directory, force=args.force)
+        except FileExistsError as exc:
+            print(exc)
+            return 1
+        print(f"wrote {len(written)} files to {args.directory}/; next steps are in {args.directory}/README.md")
+        return 0
     if args.cmd == "status":
         print(_status(args.run_dir))
         return 0

@@ -77,3 +77,9 @@ making progress; an optional smoke stage checks a few cases before real spend.
 Known-answer scenarios with a scripted proposer and critic (a real fix must be accepted, a harmful edit and
 a neutral rewording must not), plus open scenarios with the real proposer. Ours. Lesson from the first run:
 measure a planted edit's effect before treating it as a known answer.
+
+## Getting started (`scaffold.py`, `command.py`)
+
+`harness-evolve init` writes a starter project (harness, cases, a one-call agent, config) wired through
+`CommandEvaluator`, which measures a harness by running any command once per case and trial and reading
+one JSON line back. Ours: the evaluator was the hardest part to write for a new agent.
