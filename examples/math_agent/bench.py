@@ -19,6 +19,9 @@ Known-answer scenarios (scripted proposer and critic, so they test the acceptanc
 Open scenarios (real proposer and critic, reported):
   find-flaw     the planted-flaw harness: does the proposer find the problem from trajectories alone?
   find-threshold  the stop_after = 1 harness with the real proposer: does it find a too-tight threshold?
+  noise-many    40 scripted neutral rewordings of the system prompt in a row, on 20 evolve problems, with
+                confirm on. Every candidate that passes its first measurement is a false accept confirm-off
+                would have made; the fresh trials then confirm it or catch it (`unconfirmed`). Reported.
   standard      the normal harness on 200 problems: held-out gain, cost, what was accepted.
 
 BENCH_CONFIRM=1 turns on confirm-before-accept and BENCH_PRUNE=1 turns on pruning of accepted edits in every
@@ -26,6 +29,7 @@ scenario (for A/B runs into a separate --out).
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -57,6 +61,34 @@ NEUTRAL_EDIT = {"component": "prompts", "hypothesis": "neutral rewording (false-
                            "find": "You are a helpful assistant that solves math word problems.",
                            "replace": "Your job is to solve math word problems."}]}
 
+_OPENERS = ("You are a helpful assistant that", "You are an assistant that", "You are a careful helper that",
+            "You are a friendly assistant that", "You are a tutor that")
+NEUTRAL_VARIANTS = [f"{o} {v} math word problems{e}" for o in _OPENERS
+                    for v in ("solves", "works through", "answers", "handles") for e in (".", " for users.")][:40]
+
+
+def _neutral_stream(run_dir: Path):
+    """A scripted proposer that rewords the current system prompt to the next neutral variant each round."""
+    calls = [0]
+
+    async def call(system: str, prompt: str):
+        from harness_evolve.llm import LLMReply
+        if "strict reviewer" in system:
+            return LLMReply('{"verdict": "accept", "reasons": ["scripted"]}', 0.0)
+        current = (Path(run_dir) / "incumbent" / "system.prompt").read_text().strip()
+        options = [v for v in NEUTRAL_VARIANTS if v != current]
+        new = options[calls[0] % len(options)]
+        calls[0] += 1
+        return LLMReply(json.dumps({"component": "prompts", "hypothesis": f"neutral rewording {calls[0]}",
+                                    "edits": [{"file": "system.prompt", "find": current, "replace": new}]}), 0.0)
+    return call
+
+
+def _noise_many(run_dir: Path):
+    llm = _neutral_stream(run_dir)
+    return config.build(run_dir, budget_usd=8.0, rounds=40, max_stall=1000, problems=PROBLEMS, n_evolve=20,
+                        heldout=False, proposer_llm=llm, critic_llm=llm, confirm=True)
+
 
 def _kat(edit: dict, harness: Path | None = None):
     return lambda run_dir: config.build(run_dir, budget_usd=3.0, rounds=1, harness_dir=harness,
@@ -80,6 +112,8 @@ def scenarios() -> list[Scenario]:
         Scenario("find-threshold", "planted flaw (stop_after 1) with the real proposer and critic, 2 rounds: reported",
                  lambda run_dir: config.build(run_dir, budget_usd=5.0, rounds=2, harness_dir=TIGHT,
                                               problems=PROBLEMS, n_evolve=100, confirm=CONFIRM, prune=PRUNE)),
+        Scenario("noise-many", "40 scripted neutral rewordings, 20 evolve problems, confirm on: reported",
+                 _noise_many),
         Scenario("standard", "normal harness, 200 evolve problems, real proposer and critic, 3 rounds: reported",
                  lambda run_dir: config.build(run_dir, budget_usd=6.0, rounds=3,
                                               problems=PROBLEMS, n_evolve=200, confirm=CONFIRM, prune=PRUNE)),

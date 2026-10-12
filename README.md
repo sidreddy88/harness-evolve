@@ -177,7 +177,14 @@ starting from a harness that stops every run at its second calculator call ($3.8
 | Scenario | Expected | Result |
 |---|---|---|
 | accept-threshold: planted flaw (`stop_after` 1) + scripted fix (8) | accepted | PASS: +9.5 points |
-| find-threshold: same flaw, real proposer | (reported) | found it from the stop messages in the trajectories and set `stop_after` to 4: held-out 71.7% → 78.5% (+6.9, 95% CI +4.0 to +10.2); within noise of rerunning the original twice | Write your own scenarios with `harness_evolve.bench.Scenario`
+| find-threshold: same flaw, real proposer | (reported) | found it from the stop messages in the trajectories and set `stop_after` to 4: held-out 71.7% → 78.5% (+6.9, 95% CI +4.0 to +10.2); within noise of rerunning the original twice |
+
+A last scenario measures what confirm-before-accept (`confirm=True`) catches: 40 scripted neutral rewordings
+in a row on a small evolve set (20 problems), so measurement noise is large ($3.83). One of the 40 passed
+its first measurement (18% cheaper, beyond the 15.4% cost band), a false accept with confirm off; on fresh
+trials it was 10% more expensive, and confirm rejected it. The other 39 were rejected outright. No pass-rate
+change came near the noise band (largest +0.05 against 0.12): on a small evolve set, false accepts come from
+cost noise. Write your own scenarios with `harness_evolve.bench.Scenario`
 and `scripted_llm` (see `examples/math_agent/bench.py`).
 
 ## Limits
