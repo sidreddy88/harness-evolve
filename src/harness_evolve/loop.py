@@ -137,6 +137,17 @@ class OptimizerConfig:
     pass_rate_tripwire: bool = True
     # Proposer/critic calls whose cost is unknown are allowed (and count $0).
     allow_unpriced_llm: bool = False
+    # Confirm before accepting: a candidate that passes the rules is re-measured, with the
+    # incumbent, on fresh trials (cached separately from the first measurement) and is
+    # accepted only if that independent measurement passes too. Costs two more evaluations
+    # per would-be acceptance; keeps a lucky first measurement from being accepted.
+    confirm: bool = False
+    # Prune accepted edits: after the rounds, if two or more edits were accepted, try the
+    # final harness without each one (its files restored to their content before it) and
+    # drop the edit if the harness is not worse without it (pass rate within the noise
+    # band, cost within the cost band, no guard case broken). Edits whose files a later
+    # accepted edit also changed are kept untested: they can't be removed on their own.
+    prune: bool = False
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -191,6 +202,7 @@ class Optimizer:
         self.publisher = publisher or LocalPublisher()
         self.transfer_evaluator = transfer_evaluator
         self.history = EditHistory(self.run.root / "history.jsonl")
+        self._key_tag = ""        # "c" while confirming: fresh trials, cached separately
 
     # ---- lifecycle ----------------------------------------------------------
 
@@ -331,8 +343,12 @@ class Optimizer:
             await self._evaluate_candidate(state, budget)
         elif state.phase == "decide":
             self._decide(state)
+        elif state.phase == "confirm":
+            await self._confirm(state, budget)
         elif state.phase == "transfer":
             await self._transfer(state, budget)
+        elif state.phase == "prune":
+            await self._prune(state, budget)
         else:
             raise RuntimeError(f"unknown phase {state.phase!r}")
 
@@ -347,7 +363,14 @@ class Optimizer:
             why = f"{state.stalled_rounds} consecutive rounds without an acceptance"
         if why is None:
             state.phase = "propose"
-        elif self.cfg.final_cases:
+        elif self.cfg.prune and len(state.accepted) >= 2:
+            state.phase, state.rounds_stop_reason = "prune", why
+            state.prune = {"next": 0, "removed": [], "kept": []}
+        else:
+            self._after_rounds(state, why)
+
+    def _after_rounds(self, state: RunState, why: str) -> None:
+        if self.cfg.final_cases:
             state.phase, state.rounds_stop_reason = "final", why
         else:
             state.phase, state.stop_reason = "done", why
@@ -355,7 +378,7 @@ class Optimizer:
     # ---- evaluation, cached per case ----------------------------------------
 
     def _case_key(self, harness_dir: Path, trials: int, case: str) -> str:
-        return f"{candidates.content_hash(harness_dir)}/k{trials}/{case}"
+        return f"{candidates.content_hash(harness_dir)}/k{trials}{self._key_tag}/{case}"
 
     def _per_case_estimate(self) -> float:
         """Mean measured cost of one trial of one case so far, for budget reservations.
@@ -578,14 +601,17 @@ class Optimizer:
         for case, record in records:
             self._record_health(state, case, record)
 
-    def _eval_ref(self, harness_dir: Path, trials: int) -> dict:
-        return {"hash": candidates.content_hash(harness_dir), "trials": trials,
-                "cases": self.cfg.evolve_cases + self.cfg.guard_cases}
+    def _eval_ref(self, harness_dir: Path, trials: int, tag: str = "") -> dict:
+        ref = {"hash": candidates.content_hash(harness_dir), "trials": trials,
+               "cases": self.cfg.evolve_cases + self.cfg.guard_cases}
+        if tag:
+            ref["tag"] = tag
+        return ref
 
     def _load_ref(self, ref: dict) -> tuple[EvalResult, list[dict]]:
         per_case, trajs = {}, []
         for case in ref["cases"]:
-            data = self.run.load_eval(f"{ref['hash']}/k{ref['trials']}/{case}")
+            data = self.run.load_eval(f"{ref['hash']}/k{ref['trials']}{ref.get('tag', '')}/{case}")
             per_case[case] = CaseResult(**data["case"])
             trajs.extend(data["trajectories"])
         return EvalResult(per_case), trajs
@@ -653,7 +679,8 @@ class Optimizer:
         if not same:
             evolved, _ = await self._evaluate(state, budget, self.run.incumbent_dir, cases, k)
         meta = {"run_id": state.run_id, "heldout_cases": len(cases), "trials": k,
-                "accepted": state.accepted, "rounds_stop_reason": state.rounds_stop_reason,
+                "accepted": state.accepted, "pruned": (state.prune or {}).get("removed", []),
+                "rounds_stop_reason": state.rounds_stop_reason,
                 "original_hash": candidates.content_hash(self.run.original_dir),
                 "evolved_hash": candidates.content_hash(self.run.incumbent_dir),
                 "spent_usd": round(state.spent_usd, 2)}
@@ -800,16 +827,52 @@ class Optimizer:
         cand = state.candidate
         inc_result, _ = self._load_ref(json.loads(state.incumbent_eval))
         cand_result, _ = self._load_ref(json.loads(cand["eval"]))
-        base = AcceptanceConfig(**self.cfg.acceptance)
-        acfg = replace(base, delta=state.delta, guard_cases=tuple(self.cfg.guard_cases),
-                       max_escalation_rise=max(base.max_escalation_rise, state.delta_esc or 0.0),
-                       cost_delta=(state.delta_cost or 0.0) if self.cfg.cost_band else 0.0)
-        d = decide(inc_result, cand_result, state.S_star, acfg)
+        d = decide(inc_result, cand_result, state.S_star, self._acceptance_config(state))
+        if d.accept and self.cfg.confirm:
+            cand["decision"] = d.to_json()          # resumable: the confirm phase finishes it
+            state.phase = "confirm"
+            return
         if d.accept and self.transfer_evaluator is not None and self.cfg.transfer_cases:
             cand["decision"] = d.to_json()          # resumable: the transfer phase finishes it
             state.phase = "transfer"
             return
         self._finish_decision(state, d)
+
+    def _acceptance_config(self, state: RunState) -> AcceptanceConfig:
+        base = AcceptanceConfig(**self.cfg.acceptance)
+        return replace(base, delta=state.delta, guard_cases=tuple(self.cfg.guard_cases),
+                       max_escalation_rise=max(base.max_escalation_rise, state.delta_esc or 0.0),
+                       cost_delta=(state.delta_cost or 0.0) if self.cfg.cost_band else 0.0)
+
+    async def _confirm(self, state: RunState, budget: Budget) -> None:
+        """Re-measure the incumbent and a would-be winner on fresh trials and accept only if
+        this independent measurement passes the same rules (the floor uses the incumbent's
+        fresh score). A lucky first measurement then has to be lucky twice."""
+        cand = state.candidate
+        cases = self.cfg.evolve_cases + self.cfg.guard_cases
+        self._key_tag = "c"
+        try:
+            inc_res, _ = await self._evaluate(state, budget, self.run.incumbent_dir, cases, self.cfg.trials)
+            cand_res, _ = await self._evaluate(state, budget, Path(cand["dir"]), cases, self.cfg.trials)
+        finally:
+            self._key_tag = ""
+        first = Decision(**cand["decision"])
+        second = decide(inc_res, cand_res, inc_res.S, self._acceptance_config(state))
+        cand["confirm"] = {"accept": second.accept, "delta_S": second.delta_S,
+                           "delta_C": second.delta_C, "reason": second.reason}
+        if not second.accept:
+            first.accept = False
+            first.reason = (f"not confirmed on fresh trials: {second.reason}; "
+                            f"first measurement: {first.reason}")
+            self._finish_decision(state, first)
+            return
+        first.reason += (f"; confirmed on fresh trials (dS {second.delta_S:+.3f}, "
+                         f"dC {second.delta_C:+.1%})")
+        if self.transfer_evaluator is not None and self.cfg.transfer_cases:
+            cand["decision"] = first.to_json()
+            state.phase = "transfer"
+            return
+        self._finish_decision(state, first)
 
     async def _transfer(self, state: RunState, budget: Budget) -> None:
         """Second-model check for a candidate the primary model accepted."""
@@ -834,6 +897,57 @@ class Optimizer:
             d.reason += f"; {note}, within margin {self.cfg.transfer_margin}"
         self._finish_decision(state, d)
 
+    async def _prune(self, state: RunState, budget: Budget) -> None:
+        """Leave one accepted edit out of the final harness (one edit per step, in the order
+        they were accepted) and remove it if the harness is not worse without it."""
+        p = state.prune
+        ids = state.accepted
+        if p["next"] >= len(ids):
+            note = (f"pruned {', '.join(p['removed'])}" if p["removed"] else "pruning removed nothing")
+            self._after_rounds(state, f"{state.rounds_stop_reason}; {note}")
+            return
+        i = p["next"]
+        chain = [self.run.original_dir] + [self.run.candidate_dir(int(c[1:])) for c in ids]
+        files = candidates.changed_files(chain[i], chain[i + 1])
+        later = {f for j in range(i + 1, len(ids)) for f in candidates.changed_files(chain[j], chain[j + 1])}
+        entry = next((e for e in self.history.entries() if e.candidate_id == ids[i] and e.outcome == "accepted"),
+                     None)
+        component, hypothesis = (entry.component, entry.hypothesis) if entry else ("unknown", "")
+        if not files or set(files) & later:
+            p["next"] = i + 1
+            p["kept"].append(ids[i])
+            self.history.append(HistoryEntry(state.round, ids[i], component, hypothesis, "", "prune_kept",
+                                             "not tested: a later accepted edit changed the same files"))
+            return
+        before = candidates.harness_files(chain[i])
+        pruned_dir = self.run.root / "candidates" / f"prune-{ids[i]}"
+        candidates.apply_edit(self.run.incumbent_dir, pruned_dir, {f: before[f] for f in files})
+        cases = self.cfg.evolve_cases + self.cfg.guard_cases
+        inc_res, _ = self._load_ref(json.loads(state.incumbent_eval))
+        pr_res, _ = await self._evaluate(state, budget, pruned_dir, cases, self.cfg.trials)
+        dS = pr_res.S - inc_res.S
+        dC = (pr_res.C - inc_res.C) / inc_res.C if inc_res.C else 0.0
+        delta, cost_band = state.delta or 0.0, state.delta_cost or 0.0
+        broken = [g for g in self.cfg.guard_cases
+                  if pr_res.per_case[g].passes == 0 and inc_res.per_case[g].passes > 0]
+        problems = ([f"pass rate fell {dS:+.3f}, beyond the noise band {delta:.3f}"] if dS < -delta else []) + \
+                   ([f"cost rose {dC:+.1%}, beyond the cost band {cost_band:.1%}"] if dC > cost_band else []) + \
+                   [f"guard case {g} broke" for g in broken]
+        diff = candidates.diff(self.run.incumbent_dir, pruned_dir)
+        p["next"] = i + 1                  # only now: a stop during the evaluation retries this edit
+        if problems:
+            p["kept"].append(ids[i])
+            outcome, reason = "prune_kept", "needed: without it " + "; ".join(problems)
+        else:
+            p["removed"].append(ids[i])
+            outcome, reason = "pruned", f"not needed: without it dS {dS:+.3f}, dC {dC:+.1%}"
+            shutil.rmtree(self.run.incumbent_dir)
+            shutil.copytree(pruned_dir, self.run.incumbent_dir)
+            state.incumbent_eval = json.dumps(self._eval_ref(pruned_dir, self.cfg.trials))
+        spent = sum(r.cost_usd for r in pr_res.per_case.values())
+        self.history.append(HistoryEntry(state.round, ids[i], component, hypothesis, diff, outcome, reason,
+                                         round(dS, 4), round(dC, 4), cost_usd=round(spent, 4)))
+
     def _finish_decision(self, state: RunState, d: Decision) -> None:
         cand = state.candidate
         cand_result, _ = self._load_ref(json.loads(cand["eval"]))
@@ -841,6 +955,7 @@ class Optimizer:
         diff = candidates.diff(self.run.incumbent_dir, cand_dir)
         spent = sum(r.cost_usd for r in cand_result.per_case.values())
         outcome = ("accepted" if d.accept else
+                   "unconfirmed" if d.reason.startswith("not confirmed on fresh trials") else
                    "transfer_rejected" if d.vetoes and "second-model" in d.reason else
                    "near_miss" if d.near_miss else "rejected")
         self.history.append(HistoryEntry(
