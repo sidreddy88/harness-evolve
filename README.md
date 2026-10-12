@@ -92,6 +92,27 @@ look broken; a watchdog exits cleanly if it stops making progress.
 
 ## Using it on your agent
 
+The quickest start is a generated project:
+
+```bash
+harness-evolve init my-agent     # harness/, cases.jsonl, run_case.py, config.py, README.md
+```
+
+It is a working one-call question-answering agent wired to the optimizer. Fill in four things,
+following `my-agent/README.md`:
+
+1. `harness/`: your agent's prompts, tool descriptions and settings.
+2. `run_case.py`: runs your agent on one case with the harness directory it is given, and prints one
+   JSON line, `{"passed": ..., "cost_usd": ..., "steps": [...]}`. It can call an agent in any language
+   or behind an API; or point `COMMAND` in `config.py` at your own program and skip Python entirely
+   (`harness_evolve.command.CommandEvaluator` runs it once per case and trial).
+3. `cases.jsonl`: real tasks, 30+ (50+ to also keep a held-out set).
+4. `config.py`: a description of your agent, what an edit must never weaken, setting bounds.
+
+Then `harness-evolve run config.py --run-dir runs/r1 --budget 2`. The config refuses to run until the
+agent is described.
+
+The rest of this section is what that project contains, if you'd rather wire it up yourself.
 You need five things.
 
 **1. A harness directory your agent reads at run time**
