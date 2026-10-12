@@ -36,7 +36,7 @@ PROFILE = AgentProfile.build(
     safety_mechanisms=["submitting a single numeric answer with submit_answer"],
     constraints="Edits must help on any arithmetic word problem, not on particular questions or numbers.",
     gaming_examples="E.g. telling the agent to round answers so near-misses count as correct.",
-    setting_bounds={"max_turns": (3, 16), "nudges": (0, 3)},
+    setting_bounds={"max_turns": (3, 16), "nudges": (0, 3), "remind_after": (1, 12), "stop_after": (1, 12)},
     grader=TrajectoryGrader())
 
 

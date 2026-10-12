@@ -4,7 +4,9 @@ shapes its behaviour in a harness directory (harness/): its prompts, tool
 descriptions and settings. harness-evolve edits copies of that directory.
 
 Tools: calculator(expression) and submit_answer(answer). The run ends when the
-agent submits, runs out of turns, or stops calling tools after its nudges.
+agent submits, runs out of turns, stops calling tools after its nudges, or makes
+more calculator calls than stop_after (stuck detection: after remind_after calls
+it is reminded to submit). Harnesses without these settings have no limit.
 """
 from __future__ import annotations
 
@@ -66,6 +68,8 @@ async def solve(question: str, harness_dir, model: str, prices: tuple[float, flo
     messages = [{"role": "system", "content": h.render("system")},
                 {"role": "user", "content": h.render("task", question=question)}]
     run, nudges = Run(), int(h.setting("nudges"))
+    remind_after, stop_after = h.settings.get("remind_after"), h.settings.get("stop_after")
+    calc_calls, stopped = 0, False
     for _ in range(int(h.setting("max_turns"))):
         run.turns += 1
         resp = await litellm.acompletion(model=model, messages=messages, tools=_tools(h), max_tokens=4000)
@@ -93,14 +97,22 @@ async def solve(question: str, harness_dir, model: str, prices: tuple[float, flo
                 except (TypeError, ValueError):
                     out = "Error: answer must be a number."
             elif c.function.name == "calculator":
-                try:
-                    out = repr(calculate(str(args.get("expression", ""))))
-                except Exception as exc:
-                    out = f"Error: {exc}"
+                calc_calls += 1
+                if stop_after is not None and calc_calls > stop_after:
+                    out, stopped = f"Stopped: more than {stop_after} calculator calls without submitting.", True
+                else:
+                    try:
+                        out = repr(calculate(str(args.get("expression", ""))))
+                    except Exception as exc:
+                        out = f"Error: {exc}"
+                    if remind_after is not None and calc_calls >= remind_after and "remind" in h.templates:
+                        out += "\n" + h.render("remind", calls=calc_calls)
             else:
                 out = f"Error: unknown tool {c.function.name}"
             run.steps.append({"name": c.function.name, "input": args, "output": out})
             messages.append({"role": "tool", "tool_call_id": c.id, "content": out})
-        if run.answer is not None:
+            if stopped:
+                break
+        if run.answer is not None or stopped:
             break
     return run
