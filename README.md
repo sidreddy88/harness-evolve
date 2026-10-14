@@ -237,14 +237,25 @@ and `scripted_llm` (see `examples/math_agent/bench.py`).
 
 ## Credits
 
-Full mapping of each component to its source, and what we changed: [docs/methods.md](docs/methods.md).
+Each component, its source, and what we changed: [docs/methods.md](docs/methods.md).
 
-
-- Reflective, trace-driven proposals: GEPA (Agrawal et al., "GEPA: Reflective Prompt Evolution Can
-  Outperform Reinforcement Learning", ICLR 2026).
-- The critic and the one-edit-per-round discipline: RRSI (google-research/rrsi, Apache-2.0); the
-  critic's reject classes are adapted from its prompt.
-- Comparing against reruns: AI2's finding that harness evolution rarely beats simply rerunning
-  (arXiv 2607.12227), which is why the final report includes the matched-budget rerun baseline.
+- **Acceptance rules and noise band:** RRSI, Xia et al., "RRSI: Regularized Recursive Self-Improvement of Agent
+  Harnesses", [arXiv 2609.24972](https://arxiv.org/abs/2609.24972). The critic's reject classes are adapted
+  from its prompt ([google-research/rrsi](https://github.com/google-research/rrsi), Apache-2.0; see
+  [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
+- **Reflective, trace-driven proposals:** GEPA, Agrawal et al., "GEPA: Reflective Prompt Evolution Can
+  Outperform Reinforcement Learning", ICLR 2026.
+- **Comparing against reruns:** Wang et al. (AI2), "Rethinking the Evaluation of Harness Evolution for Agents",
+  [arXiv 2607.12227](https://arxiv.org/abs/2607.12227).
+- **Agent self-feedback as evidence:** HarnessCompass, [arXiv 2608.01918](https://arxiv.org/abs/2608.01918).
+- **Near-miss archive:** Darwin Gödel Machine ([arXiv 2505.22954](https://arxiv.org/abs/2505.22954)) and
+  Huxley-Gödel Machine ([arXiv 2510.21614](https://arxiv.org/abs/2510.21614)).
+- **Cost only on shared successes:** Hugging Face / FineEnvs, "Multi-harness RL".
+- **Structural switches and confirm-before-accept:** motivated by Fan et al., "An Empirical Study of Harness
+  Design for Coding Agents", [arXiv 2609.20804](https://arxiv.org/abs/2609.20804).
+- **ATIF trajectories:** the ATIF format from [Harbor](https://github.com/harbor-framework/harbor); idea from
+  "Building VT Code, a year in" (Hugging Face, 2026).
+- **pass@k and pass^k:** Chen et al., "Evaluating Large Language Models Trained on Code" (HumanEval, 2021);
+  Yao et al., τ-bench (2024).
 
 MIT license.
