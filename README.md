@@ -253,8 +253,6 @@ Each component, its source, and what we changed: [docs/methods.md](docs/methods.
 - **Cost only on shared successes:** Hugging Face / FineEnvs, "Multi-harness RL".
 - **Structural switches and confirm-before-accept:** motivated by Fan et al., "An Empirical Study of Harness
   Design for Coding Agents", [arXiv 2609.20804](https://arxiv.org/abs/2609.20804).
-- **ATIF trajectories:** the ATIF format from [Harbor](https://github.com/harbor-framework/harbor); idea from
-  "Building VT Code, a year in" (Hugging Face, 2026).
 - **pass@k and pass^k:** Chen et al., "Evaluating Large Language Models Trained on Code" (HumanEval, 2021);
   Yao et al., τ-bench (2024).
 
