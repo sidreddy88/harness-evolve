@@ -13,10 +13,11 @@ run it before a scheduled run. Each check is a mistake a real run already paid f
 - tripwire baselines missing, so health.py skips its checks silently
 - no smoke stage, so a broken setup costs a whole round 0 instead of ~$1
 - a starting harness that fails the validation every candidate must pass
+- a grader nothing has checked: no anchors, an evaluator that can't grade them, no task contract
 
-What it can't see without running the agent (a tool failing on every call, replays costing $0, a
-grader that passes everything) is the smoke stage's job (OptimizerConfig.smoke_cases); `check` warns
-when that stage is off.
+What it can't see without running anything (a tool failing on every call, replays costing $0, a
+grader that mislabels its anchors) is for the run's own first phases: anchors, then the smoke stage,
+then round 0's always-pass tripwire. `check` warns when any of them is off.
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ import os
 from dataclasses import dataclass, fields
 from pathlib import Path
 
-from harness_evolve import candidates, profiles
+from harness_evolve import anchors, candidates, profiles
 
 FAIL, WARN, OK = "FAIL", "WARN", "OK"
 
@@ -239,10 +240,50 @@ def health(cfg) -> list[Finding]:
     return out
 
 
+def grader(cfg, evaluator) -> list[Finding]:
+    out = []
+    if not cfg.anchors:
+        out.append(Finding(WARN, "grader", "no anchors: nothing checks that the grader can tell right from wrong "
+                                           "before the run trusts it",
+                           "add anchors (anchors.jsonl, see anchors.py): a few correct outputs and clearly wrong "
+                           "ones; a blank output is added for each case automatically"))
+    else:
+        bad = anchors.problems(cfg.anchors)
+        if bad:
+            out.append(Finding(FAIL, "grader", "; ".join(bad[:3]), "fix anchors.jsonl"))
+        elif not callable(getattr(evaluator, "grade", None)):
+            out.append(Finding(FAIL, "grader", "anchors are set but the evaluator can't grade an output on its own",
+                               "give CommandEvaluator a grade_command, or add grade(case_id, output) to your "
+                               "evaluator"))
+        else:
+            known = (set(cfg.evolve_cases) | set(cfg.guard_cases) | set(cfg.final_cases)
+                     | set(cfg.smoke_cases) | set(cfg.transfer_cases))
+            stray = sorted({a["case"] for a in cfg.anchors} - known)
+            if stray:
+                out.append(Finding(WARN, "grader", f"anchors for cases in no case list: {stray[:5]}",
+                                   "check the case ids; the grader looks each case up"))
+            if not any(a["passed"] for a in cfg.anchors):
+                out.append(Finding(WARN, "grader", "no anchor expects a pass, so a grader that fails everything "
+                                                   "passes them", "add a correct output or two"))
+            n_blank = len(anchors.with_blanks(cfg.anchors)) - len(cfg.anchors)
+            if not out:
+                out.append(Finding(OK, "grader", f"{len(cfg.anchors)} anchors (+{n_blank} blank outputs) are "
+                                                 "graded before anything else"))
+    if cfg.always_pass_tripwire is None:
+        out.append(Finding(WARN, "grader", "always_pass_tripwire is off: a grader that passes everything won't "
+                                           "stop round 0", "leave it at 0.98 unless the agent really is that good"))
+    if not profiles.active().task_contract:
+        out.append(Finding(WARN, "grader", "no task_contract: the critic judges grader gaming without being told "
+                                           "what counts as correct",
+                           "pass task_contract=\"...\" to AgentProfile.build"))
+    return out
+
+
 def run(opt) -> list[Finding]:
     cfg = opt.cfg
     return (harness(opt.base) + cases(cfg) + resolution(cfg) + budget(cfg)
-            + llms(opt.proposer_llm, opt.critic_llm, cfg.allow_unpriced_llm) + health(cfg))
+            + llms(opt.proposer_llm, opt.critic_llm, cfg.allow_unpriced_llm) + grader(cfg, opt.evaluator)
+            + health(cfg))
 
 
 def render(findings: list[Finding]) -> str:

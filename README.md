@@ -91,6 +91,15 @@ candidate's content hash; a hard budget is checked before each case; provider fa
 rate limits) stop the run instead of being scored as failures; tripwires pause it when measurements
 look broken; a watchdog exits cleanly if it stops making progress.
 
+The grader is checked too, because a grader that passes everything makes every result look like
+progress. Before anything else, optional anchors (`anchors.jsonl`: outputs with known verdicts, plus a
+blank output per case that must fail) are graded, and one wrong label pauses the run. Round 0 stops the
+run if nearly every evolve trial passes (`always_pass_tripwire`, 98%): nothing to improve, or a grader
+that can't fail. An optional `task_contract` in the profile tells the critic what counts as correct, so
+it can judge grader gaming against it. Source: arXiv
+[2610.11464](https://arxiv.org/abs/2610.11464), where a grader evolved without anchors collapsed into
+always-pass while the agent still appeared to improve.
+
 ## Using it on your agent
 
 The quickest start is a generated project:
@@ -118,9 +127,12 @@ so it is free; it exits 1 on a FAIL (`--strict`: on a WARN too), so CI can run i
 It checks that the starting harness passes the validation every candidate must pass and that every
 numeric setting is bounded; that held-out cases don't overlap the evolve and guard cases; the smallest
 gain your case and trial counts can accept; whether the budget finishes round 0 and how many rounds it
-covers; that the proposer and critic models have prices; and that the tripwire baselines and the smoke
-stage are set. Each is a mistake one of our runs paid for. What only a real run shows (a tool failing on
-every call, $0 replays) is the smoke stage's job (`smoke_cases`, ~$1).
+covers; that the proposer and critic models have prices; that grader anchors, the always-pass tripwire
+and a task contract are set, and the evaluator can grade the anchors; and that the tripwire baselines
+and the smoke stage are set. Each is a mistake one of our runs paid for, or one the grader-safety work
+guards against. What only a real run shows (a grader mislabelling an anchor, a tool failing on every
+call, $0 replays) is for the run's first phases: anchors, the smoke stage (`smoke_cases`, ~$1), then
+round 0.
 
 The rest of this section is what that project contains, if you'd rather wire it up yourself.
 You need five things.

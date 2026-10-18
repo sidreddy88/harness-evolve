@@ -17,14 +17,29 @@ from harness_evolve.loop import Optimizer, OptimizerConfig
 from .conftest import FIXTURE_HARNESS
 
 
-def _opt(tmp_path, harness=FIXTURE_HARNESS, proposer=None, **cfg):
+class Grades:
+    """An evaluator that can grade an output alone: passes it if it is "right"."""
+
+    async def grade(self, case_id, output):
+        return {"passed": output == "right", "cost_usd": 0.0}
+
+
+ANCHORS = [{"case": "c0", "output": "right", "passed": True}, {"case": "c0", "output": "wrong", "passed": False}]
+
+
+@pytest.fixture(autouse=True)
+def _contract():
+    profiles.use(dataclasses.replace(profiles.active(), task_contract="the diagnosis names the right file"))
+
+
+def _opt(tmp_path, harness=FIXTURE_HARNESS, proposer=None, evaluator=None, **cfg):
     ids = [f"c{i}" for i in range(60)]
-    base = dict(evolve_cases=ids[:40], guard_cases=[], final_cases=ids[40:], smoke_cases=ids[:3],
+    base = dict(evolve_cases=ids[:40], guard_cases=[], final_cases=ids[40:], smoke_cases=ids[:3], anchors=ANCHORS,
                 budget_usd=100.0, default_case_cost_usd=0.05, max_rounds=3, trials=2,
                 health_baseline={"tool_failure_rate": {"grep_codebase": 0.1}, "cost_per_trial_usd": 0.05,
                                  "pass_rate": 0.6})
     llm = proposer or scripted_llm({})
-    return Optimizer(tmp_path / "run", harness, OptimizerConfig(**{**base, **cfg}), evaluator=None,
+    return Optimizer(tmp_path / "run", harness, OptimizerConfig(**{**base, **cfg}), evaluator=evaluator or Grades(),
                      proposer_llm=llm, critic_llm=llm, critic_patterns=[])
 
 
@@ -154,3 +169,18 @@ def test_cli(tmp_path, capsys, monkeypatch):
 def test_tiny_case_set_says_nothing_can_be_accepted(tmp_path):
     findings = check.run(_opt(tmp_path, evolve_cases=["a", "b"], final_cases=[], smoke_cases=[], trials=1))
     assert "no gain can be accepted" in check.render(findings)
+
+
+def test_grader_findings(tmp_path):
+    assert _levels(check.run(_opt(tmp_path)), "grader") == [check.OK]
+    assert _levels(check.run(_opt(tmp_path, anchors=[])), "grader") == [check.WARN]
+    assert _levels(check.run(_opt(tmp_path, anchors=[{"case": "c0", "output": 3}])), "grader") == [check.FAIL]
+
+    class NoGrade:
+        pass
+    assert _levels(check.run(_opt(tmp_path, evaluator=NoGrade())), "grader") == [check.FAIL]
+    text = check.render(check.run(_opt(tmp_path, anchors=[{"case": "zz", "output": "x", "passed": False}],
+                                       always_pass_tripwire=None)))
+    assert "['zz']" in text and "no anchor expects a pass" in text and "always_pass_tripwire is off" in text
+    profiles.use(dataclasses.replace(profiles.active(), task_contract=""))
+    assert "no task_contract" in check.render(check.run(_opt(tmp_path)))

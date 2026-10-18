@@ -72,6 +72,15 @@ unpriced model reply stops the run instead of spending blind; tripwires pause it
 broken (a tool failing far above normal, $0 costs, errored runs); a watchdog exits cleanly if it stops
 making progress; an optional smoke stage checks a few cases before real spend.
 
+## Grader safety (`anchors.py`, `loop.py`, `profiles.py`) and pre-run checks (`check.py`)
+
+| What | How | Source |
+|---|---|---|
+| Grader anchors | Outputs with known verdicts (and a blank output per case, added automatically, that must fail) are graded before any agent run; one wrong label pauses the run | arXiv 2610.11464 ("Who Verifies the Verifier?"): without anchor guards an evolved grader collapsed into always-pass and the agent still appeared to improve |
+| Always-pass tripwire | Round 0 passing ≥98% of evolve trials stops the run: nothing to improve, or a grader that can't fail | Same paper; ours as a cheap tripwire |
+| Task contract | An optional statement of what counts as correct, shown to the critic for its grader-gaming rule | Same paper: an outer judge missed rubric gaming until given the task contract |
+| `harness-evolve check` | Static pre-run checks with no model calls (harness validity, case overlap, smallest acceptable gain, budget, prices, grader safety, tripwires); exit 1 on FAIL | Ours, from mistakes our runs paid for; deterministic-check design from harness-score (github.com/paladini/harness-score) |
+
 ## Benchmarking the optimizer (`bench.py`)
 
 Known-answer scenarios with a scripted proposer and critic (a real fix must be accepted, a harmful edit and

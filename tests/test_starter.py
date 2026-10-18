@@ -82,9 +82,14 @@ def test_starter_runs_end_to_end_once_filled_in(tmp_path, monkeypatch):
     (proj / "run_case.py").write_text(textwrap.dedent('''
         import json, sys
         from pathlib import Path
+        if sys.argv[1] == "--grade":
+            print(json.dumps({"passed": Path(sys.argv[3]).read_text() == "x"}))
+            sys.exit(0)
         careful = "carefully" in (Path(sys.argv[1]) / "system.prompt").read_text()
         print(json.dumps({"passed": careful, "cost_usd": 0.001}))
     '''))
+    (proj / "anchors.jsonl").write_text('{"case": "c0", "output": "x", "passed": true}\n'
+                                        '{"case": "c0", "output": "y", "passed": false}\n')
     cfg = (proj / "config.py").read_text().replace('"TODO: describe your agent"', '"Answers questions."')
     (proj / "config.py").write_text(cfg)
     monkeypatch.setenv("MODEL", "some/model")
@@ -103,6 +108,34 @@ def test_starter_runs_end_to_end_once_filled_in(tmp_path, monkeypatch):
     finally:
         profiles._active = previous
     assert state.phase == "done" and state.accepted == ["r1"]
+    assert state.health["anchors"]["problems"] == []          # 2 anchors + an automatic blank, all right
+
+
+def test_starter_anchors_stop_a_grader_that_passes_everything(tmp_path, monkeypatch):
+    proj = tmp_path / "proj"
+    cli.main(["init", str(proj)])
+    (proj / "cases.jsonl").write_text("".join(json.dumps({"id": f"c{i}", "question": "q", "expected": "x"}) + "\n"
+                                              for i in range(12)))
+    (proj / "run_case.py").write_text('import json; print(json.dumps({"passed": True, "cost_usd": 0.001}))\n')
+    (proj / "anchors.jsonl").write_text('{"case": "c0", "output": "x", "passed": true}\n'
+                                        '{"case": "c0", "output": "y", "passed": false}\n')
+    cfg = (proj / "config.py").read_text().replace('"TODO: describe your agent"', '"Answers questions."')
+    (proj / "config.py").write_text(cfg)
+    monkeypatch.setenv("MODEL", "some/model")
+    previous = profiles._active
+    try:
+        spec = importlib.util.spec_from_file_location("starter_config3", proj / "config.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        opt = mod.build(tmp_path / "run", budget_usd=1.0, rounds=1)
+        opt.proposer_llm = opt.critic_llm = scripted_llm({})
+        state = asyncio.run(opt.run_until_stopped())
+    finally:
+        profiles._active = previous
+    assert state.phase == "anchors" and "grader anchors" in state.stop_reason
+    assert "'y' should fail but passed" in state.stop_reason and "a blank output should fail" in state.stop_reason
+    assert not (tmp_path / "run" / "evals").exists()                 # no agent ran
+    assert state.spent_usd == pytest.approx(0.003)                       # grading 3 outputs is counted
 
 
 def test_starter_config_refuses_to_run_with_the_todo_description(tmp_path, monkeypatch):
