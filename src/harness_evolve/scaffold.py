@@ -33,6 +33,7 @@ Four steps to optimize your agent:
 export MODEL=together_ai/deepseek-ai/DeepSeek-V4.1-Flash     # any litellm model id
 export PRICES_PER_MTOK=0.30,1.20                             # $ per million input,output tokens (optional)
 python run_case.py harness q1                                # one case by hand: check the JSON line
+harness-evolve check config.py --budget 2                    # free pre-run checks, no model calls
 harness-evolve run config.py --run-dir runs/r1 --budget 2
 harness-evolve status runs/r1
 harness-evolve diff runs/r1

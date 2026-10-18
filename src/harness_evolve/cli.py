@@ -2,6 +2,7 @@
 harness-evolve command line.
 
     harness-evolve init my-agent          # a starter project to fill in
+    harness-evolve check CONFIG.py [--budget 5] [--rounds 3] [--strict]   # free pre-run checks
     harness-evolve run CONFIG.py --run-dir runs/r1 [--budget 5] [--rounds 3]
     harness-evolve status runs/r1
     harness-evolve diff runs/r1
@@ -20,6 +21,7 @@ import importlib.util
 import inspect
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -70,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
     i = sub.add_parser("init", help="write a starter project for your agent")
     i.add_argument("directory", type=Path)
     i.add_argument("--force", action="store_true", help="overwrite existing starter files")
+    c = sub.add_parser("check", help="free pre-run checks: no model calls; exit 1 on a FAIL")
+    c.add_argument("config", type=Path)
+    c.add_argument("--budget", type=float, help="the cap you will pass to run")
+    c.add_argument("--rounds", type=int, help="the rounds you will pass to run")
+    c.add_argument("--strict", action="store_true", help="exit 1 on a WARN too")
     r = sub.add_parser("run", help="start or resume a run")
     r.add_argument("config", type=Path)
     r.add_argument("--run-dir", type=Path, required=True)
@@ -120,6 +127,12 @@ def main(argv: list[str] | None = None) -> int:
         kwargs["budget_usd"] = args.budget
     if args.rounds is not None and "rounds" in params:
         kwargs["rounds"] = args.rounds
+    if args.cmd == "check":
+        from harness_evolve import check
+        with tempfile.TemporaryDirectory() as tmp:          # build() may create files; keep them out of runs/
+            findings = check.run(mod.build(Path(tmp) / "check", **kwargs))
+        print(check.render(findings))
+        return check.exit_code(findings, args.strict)
     opt = mod.build(args.run_dir, **kwargs)
     try:
         asyncio.run(opt.run_until_stopped())

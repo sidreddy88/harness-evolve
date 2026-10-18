@@ -53,4 +53,5 @@ def litellm_llm(model: str, prices: tuple[float, float] | None = None, max_token
             except Exception:
                 cost = None
         return LLMReply(text, cost)
+    call.model, call.prices = model, prices   # read by `harness-evolve check`
     return call
