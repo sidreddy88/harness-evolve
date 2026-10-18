@@ -5,6 +5,7 @@ harness-evolve command line.
     harness-evolve check CONFIG.py [--budget 5] [--rounds 3] [--strict]   # free pre-run checks
     harness-evolve run CONFIG.py --run-dir runs/r1 [--budget 5] [--rounds 3]
     harness-evolve status runs/r1
+    harness-evolve serve runs              # web app + REST API over run directories
     harness-evolve diff runs/r1
     harness-evolve bench BENCH.py --out runs/bench-1 [--only accept-good,reject-bad]
 
@@ -82,6 +83,10 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--run-dir", type=Path, required=True)
     r.add_argument("--budget", type=float, help="hard cap in USD")
     r.add_argument("--rounds", type=int, help="maximum rounds")
+    v = sub.add_parser("serve", help="web app and REST API over run directories")
+    v.add_argument("runs_dir", type=Path, nargs="?", default=Path("runs"))
+    v.add_argument("--host", default="127.0.0.1")
+    v.add_argument("--port", type=int, default=8765)
     s = sub.add_parser("status", help="summarize a run")
     s.add_argument("run_dir", type=Path)
     d = sub.add_parser("diff", help="show accepted edits")
@@ -101,6 +106,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"wrote {len(written)} files to {args.directory}/; next steps are in {args.directory}/README.md")
         return 0
+    if args.cmd == "serve":
+        from harness_evolve import server
+        return server.serve(args.runs_dir, args.host, args.port)
     if args.cmd == "status":
         print(_status(args.run_dir))
         return 0
