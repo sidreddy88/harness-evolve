@@ -179,3 +179,14 @@ def test_serve_refuses_a_public_host_without_a_token(monkeypatch, capsys):
     monkeypatch.delenv("HE_SERVE_TOKEN", raising=False)
     assert server.serve("runs", host="0.0.0.0") == 1
     assert "refusing" in capsys.readouterr().out
+
+
+def test_run_page_links_the_pull_request(root):
+    p = root / "r1" / "proposals" / "r1" / "github.json"
+    p.write_text(json.dumps({"pull_request": "https://github.com/o/r/pull/7", "branch": "harness-evolve/r1"}))
+    c = _client(root)
+    assert c.get("/api/runs/r1").json()["pull_request"]["url"] == "https://github.com/o/r/pull/7"
+    assert "https://github.com/o/r/pull/7" in c.get("/runs/r1").text
+    p.write_text(json.dumps({"error": "gh: not logged in <b>"}))
+    page = c.get("/runs/r1").text
+    assert "publishing failed: gh: not logged in &lt;b&gt;" in page
