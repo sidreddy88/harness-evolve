@@ -56,6 +56,7 @@ harness-evolve check examples/math_agent/config.py --budget 2   # free: no model
 harness-evolve run examples/math_agent/config.py --run-dir runs/math-1 --budget 2
 harness-evolve status runs/math-1
 harness-evolve diff runs/math-1               # accepted edits, as diffs to review
+harness-evolve serve runs                     # the same, in a browser (pip install "harness-evolve[serve]")
 ```
 
 What to expect (our run, DeepSeek-V4.1-Flash, $1.06, before the stuck-detection settings and switches
@@ -200,20 +201,71 @@ example does.
 
 ## Watching and steering runs in a browser
 
+`harness-evolve serve` is a small web app (and REST API) over your run directories. It reads what runs
+already write (`state.json`, `history.jsonl`, `proposals/`, `report/`), so there is nothing to set up and
+no database.
+
+**1. Install and start it**
+
 ```bash
 pip install "harness-evolve[serve]"
-harness-evolve serve runs          # http://127.0.0.1:8765, also a REST API under /api (docs at /api/docs)
+harness-evolve serve runs                 # the folder your --run-dir runs live in; default: runs
+# harness-evolve serving /path/to/runs on http://127.0.0.1:8765
 ```
 
-Every run under `runs/` (bench scenarios included): status, spend, the noise band, each round's decision
-and reason, diffs, the held-out report and tripwire pauses. From the same pages you can approve or reject a
-proposal (recorded in `proposals/rN/review.json`; applying it stays with your normal review), run `check`
-on a config, and start or resume a run. Runs start as their own processes, so they keep going if the server
-stops, and log to `RUN_DIR/serve.log`. The run directories are the only storage.
+Open http://127.0.0.1:8765. Options: `--port 8765`, `--host 127.0.0.1` (see step 6 before changing it).
 
-Starting a run executes its config, so the server binds to 127.0.0.1 and only accepts requests addressed
-to localhost. To serve it anywhere else, set `HE_SERVE_TOKEN` (sent as `Authorization: Bearer ...`, or
-open `/login?token=...` once in a browser); without one it refuses to start.
+**2. Find a run.** The runs page lists every run under the folder, newest first, including bench
+scenarios (`bench-1/find-flaw`): status (running, stopped or done), phase and round, accepted edits,
+spend, and why it stopped.
+
+**3. Read a run.** A run's page shows the starting pass rate, the noise band and cost band, spend against
+the budget, and every round: the component edited, accepted or rejected and why, the change in pass rate
+and cost, and the proposer's hypothesis. Below that: the accepted edits, the held-out report, tripwire
+pauses, and the end of the run's log.
+
+**4. Review a proposal.** Open an accepted edit (`r1`, `r2`, ...) to see its diff and evidence, then
+**approve** or **reject** it with an optional note. Your verdict is saved in `proposals/rN/review.json`;
+nothing is applied to your code. Apply `harness.diff` through your normal review.
+
+**5. Check, start and resume runs.**
+- *Check a config:* enter its path (and the budget and rounds you plan to use) to run `harness-evolve
+  check` on it. Free: no model calls.
+- *Start a run:* config path, a run name (it becomes `runs/<name>`), budget and rounds. The run starts as
+  its own process and keeps going if the server stops. Its output goes to `runs/<name>/serve.log`.
+- *Resume a stopped run:* the **resume** button on its page, optionally with a higher budget. Runs
+  started from the command line need the config path they were started with (the server only remembers
+  configs for runs it started).
+
+**6. Serving beyond your machine.** Starting a run executes its config file, so anyone who can reach the
+server can run code as you. By default it binds to 127.0.0.1 and only answers requests addressed to
+localhost. To serve it on another host, set a token first; without one it refuses to start:
+
+```bash
+export HE_SERVE_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(24))")
+harness-evolve serve runs --host 0.0.0.0
+```
+
+In a browser, open `http://<host>:8765/login?token=<token>` once (it sets a cookie). From scripts, send
+`Authorization: Bearer <token>`. Put it behind HTTPS if it leaves a private network.
+
+**The REST API** has the same data and actions (interactive docs at `/api/docs`). POST bodies must be JSON:
+
+```bash
+curl -s localhost:8765/api/runs                                  # every run, summarized
+curl -s localhost:8765/api/runs/math-1                           # one run: rounds, proposals, report
+curl -s localhost:8765/api/runs/math-1/proposals/r1              # an accepted edit's diff and decision
+curl -s -X POST localhost:8765/api/runs/math-1/proposals/r1/review \
+     -H 'Content-Type: application/json' -d '{"decision": "approved", "note": "looks right"}'
+curl -s -X POST localhost:8765/api/check -H 'Content-Type: application/json' \
+     -d '{"config": "examples/math_agent/config.py", "budget": 2}'
+curl -s -X POST localhost:8765/api/runs -H 'Content-Type: application/json' \
+     -d '{"config": "examples/math_agent/config.py", "name": "math-2", "budget": 2, "rounds": 3}'
+curl -s -X POST localhost:8765/api/runs/math-2/resume -H 'Content-Type: application/json' -d '{"budget": 4}'
+```
+
+Not yet: pages don't refresh themselves (reload to see progress), and there is no stop button (stop a run
+with Ctrl-C in its terminal, or `kill` the pid in `runs/<name>/serve.json`; it resumes where it stopped).
 
 ## Benchmarking the optimizer
 
