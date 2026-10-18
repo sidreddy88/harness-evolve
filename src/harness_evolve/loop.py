@@ -164,6 +164,8 @@ class OptimizerConfig:
 
 
 class Publisher(Protocol):
+    """Where accepted edits go. Optional: finalize(run), called once the run is done (github.py)."""
+
     def publish(self, run: RunDir, round_no: int, candidate_dir: Path, diff: str,
                 decision: dict, hypothesis: str) -> Path: ...
 
@@ -247,6 +249,8 @@ class Optimizer:
                     {"phase": label, "start": started, "seconds": round(time.monotonic() - t0, 1)})
                 self._progress(state)
                 self.run.save(state)
+            if callable(getattr(self.publisher, "finalize", None)):
+                self.publisher.finalize(self.run)     # e.g. GitHubPublisher: final harness, report, ready
         except health.Tripwire as exc:
             # A pause, like a provider failure: the phase is kept.
             state.stop_reason = f"tripwire, check the run then resume: {exc}"

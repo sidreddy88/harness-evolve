@@ -156,6 +156,14 @@ def proposal(d: Path, r: str) -> dict:
             "decision": _read_json(p / "decision.json") or {}, "review": _read_json(p / "review.json")}
 
 
+def pull_request(d: Path) -> dict | None:
+    """The run's GitHub PR (GitHubPublisher), from the newest github*.json it wrote: url or error."""
+    recs = sorted((d / "proposals").glob("**/github*.json"), key=lambda p: p.stat().st_mtime) \
+        if (d / "proposals").is_dir() else []
+    rec = _read_json(recs[-1]) if recs else None
+    return {"url": rec.get("pull_request"), "error": rec.get("error")} if isinstance(rec, dict) else None
+
+
 def detail(root: Path, d: Path) -> dict:
     s = _read_json(d / "state.json") or {}
     report = d / "report" / "report.md"
@@ -165,6 +173,7 @@ def detail(root: Path, d: Path) -> dict:
             "trips": (s.get("health") or {}).get("trips", []),
             "heartbeat": _read_json(d / "heartbeat.json"),
             "started": _read_json(d / "serve.json"),
+            "pull_request": pull_request(d),
             "log_tail": "\n".join(log.read_text(errors="replace").splitlines()[-40:]) if log.is_file() else None}
 
 
@@ -340,6 +349,11 @@ def run_page(root: Path, d: Path) -> str:
           ("cost band", "-" if x["delta_cost"] is None else f"{x['delta_cost']:.1%}"),
           ("spent", f"${x['spent_usd']:.2f}" + (f" of ${x['budget_usd']:.2f}" if x["budget_usd"] else "")),
           ("accepted", E(", ".join(x["accepted"]) or "none")), ("stopped because", E(x["stop_reason"] or "-"))]
+    pr = x["pull_request"]
+    if pr and pr.get("url") and str(pr["url"]).startswith("https://"):
+        kv.append(("pull request", f"<a href='{E(pr['url'])}'>{E(pr['url'])}</a>"))
+    elif pr and pr.get("error"):
+        kv.append(("pull request", f"<span class=del>publishing failed: {E(pr['error'])}</span>"))
     body = "<table class=kv>" + "".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in kv) + "</table>"
     if x["status"] == "stopped":
         cfg = (x["started"] or {}).get("config", "")

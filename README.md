@@ -199,6 +199,37 @@ asyncio.run(opt.run_until_stopped())
 Or put a `build(run_dir, budget_usd, rounds)` function in a config file and use the CLI, as the
 example does.
 
+## Publishing edits as a GitHub pull request
+
+By default accepted edits are written to `runs/<id>/proposals/` for you to apply. To get them as a pull
+request on your agent's repo instead, pass a `GitHubPublisher` in your config:
+
+```python
+from harness_evolve.github import GitHubPublisher
+
+publisher = GitHubPublisher(repo="~/code/my-agent",          # a local clone of the agent's repo
+                            harness_path="agent/harness",    # the harness folder, relative to the repo
+                            base="main")                     # the branch PRs target
+return Optimizer(run_dir, HERE / "harness", cfg, evaluator=..., proposer_llm=llm, critic_llm=llm,
+                 critic_patterns=[], publisher=publisher)
+```
+
+Needs `git` and the GitHub CLI (`gh auth login`, with permission to push branches and open PRs).
+
+- **One draft PR per run**, on the branch `harness-evolve/<run id>`. Accepted edits build on each other,
+  so they share one PR; each edit is its own commit, so you can review them one at a time. The
+  description lists every edit with its hypothesis, decision, and change in pass rate and cost.
+- **When the run finishes**, the branch is synced to the final harness (an edit removed by pruning gets
+  its own commit), the held-out report goes into the description, and the PR is marked ready for review.
+- **Merge to adopt the evolved harness; close to discard it.** Nothing reaches your code without a person
+  merging, and nothing is ever pushed to `base`.
+- **Your checkout is never touched:** the publisher works in a temporary git worktree.
+- **It refuses a stale base:** if the harness on `base` changed since the run started, a PR would quietly
+  revert those changes, so it records an error instead (start a new run from the current harness).
+- **Publishing never stops a run:** if `gh` or the network fails, the edit is still written to
+  `proposals/`, the error is saved in `proposals/rN/github.json`, and the next edit or the end of the run
+  retries. `harness-evolve serve` shows the PR link, or the error, on the run's page.
+
 ## Watching and steering runs in a browser
 
 `harness-evolve serve` is a small web app (and REST API) over your run directories. It reads what runs
