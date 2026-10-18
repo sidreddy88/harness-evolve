@@ -13,7 +13,7 @@ FILES: dict[str, str] = {}
 
 FILES["README.md"] = """# {name}: a harness-evolve project
 
-Four steps to optimize your agent:
+Five steps to optimize your agent:
 
 1. **Harness** (`harness/`): move the text and knobs that shape your agent's behaviour here.
    `*.prompt` files are templates (`{question}` is filled by the agent), `tool_descriptions.json` is
@@ -27,12 +27,17 @@ Four steps to optimize your agent:
    Use real tasks from your workload; 30+ for the noise band to be useful, 50+ to also keep a
    held-out set.
 4. **Config** (`config.py`): describe your agent (`AGENT_DESCRIPTION`), list what an edit must never
-   weaken (`SAFETY`), set bounds for numeric settings. Then:
+   weaken (`SAFETY`), say what counts as correct (`TASK_CONTRACT`), set bounds for numeric settings.
+5. **Anchors** (`anchors.jsonl`): outputs with known verdicts, a few right and some clearly wrong, for
+   your real cases. Before anything else, the run grades them with `run_case.py --grade` and pauses if
+   one is mislabelled (a blank output must fail too, added automatically): a grader that passes
+   everything would make every result look like progress. Then:
 
 ```bash
 export MODEL=together_ai/deepseek-ai/DeepSeek-V4.1-Flash     # any litellm model id
 export PRICES_PER_MTOK=0.30,1.20                             # $ per million input,output tokens (optional)
 python run_case.py harness q1                                # one case by hand: check the JSON line
+harness-evolve check config.py --budget 2                    # free pre-run checks, no model calls
 harness-evolve run config.py --run-dir runs/r1 --budget 2
 harness-evolve status runs/r1
 harness-evolve diff runs/r1
@@ -63,11 +68,20 @@ FILES["cases.jsonl"] = """{"id": "q1", "question": "What is 17 * 23?", "expected
 {"id": "q3", "question": "How many days are in a leap year?", "expected": "366"}
 """
 
+FILES["anchors.jsonl"] = """{"case": "q1", "output": "Answer: 391", "passed": true, "why": "correct"}
+{"case": "q1", "output": "Answer: 390", "passed": false, "why": "wrong number"}
+{"case": "q1", "output": "17 * 23 is 391", "passed": false, "why": "right number, no Answer: line"}
+{"case": "q2", "output": "Answer: Canberra", "passed": true, "why": "correct"}
+{"case": "q2", "output": "What is the capital of Australia?", "passed": false, "why": "copies the question"}
+"""
+
 FILES["run_case.py"] = '''"""
 Run the agent on ONE case with a given harness, grade it, and print one JSON line (the last line of
 stdout is what harness-evolve reads):
 
     python run_case.py HARNESS_DIR CASE_ID
+    python run_case.py --grade CASE_ID OUTPUT_FILE    grade an output without running the agent
+                                                      (for the grader anchors in anchors.jsonl)
 
     {"passed": bool, "cost_usd": float,              required
      "submitted": bool, "detail": str, "answer": str,  optional ("answer" is hidden from the proposer)
@@ -121,9 +135,18 @@ def _provider_problem(exc: Exception) -> bool:
                                    "insufficient", "api key", "serviceunavailable"))
 
 
+def _cases() -> dict:
+    return {c["id"]: c for c in map(json.loads, (HERE / "cases.jsonl").read_text().splitlines()) if c}
+
+
+def grade_only(case_id: str, output_file: str) -> dict:
+    """The grader alone, on a given output: harness-evolve checks it against anchors.jsonl first."""
+    passed, _, _ = grade(_cases()[case_id], Path(output_file).read_text())
+    return {"passed": passed, "cost_usd": 0.0}
+
+
 def main(harness_dir: str, case_id: str) -> dict:
-    cases = {c["id"]: c for c in map(json.loads, (HERE / "cases.jsonl").read_text().splitlines()) if c}
-    case = cases[case_id]
+    case = _cases()[case_id]
     try:
         run = run_agent(load_harness(harness_dir), case)
     except Exception as exc:
@@ -136,7 +159,10 @@ def main(harness_dir: str, case_id: str) -> dict:
 
 
 if __name__ == "__main__":
-    print(json.dumps(main(sys.argv[1], sys.argv[2])))
+    if sys.argv[1] == "--grade":
+        print(json.dumps(grade_only(sys.argv[2], sys.argv[3])))
+    else:
+        print(json.dumps(main(sys.argv[1], sys.argv[2])))
 '''
 
 FILES["config.py"] = '''"""
@@ -155,7 +181,7 @@ import random
 import sys
 from pathlib import Path
 
-from harness_evolve import AgentProfile, Optimizer, OptimizerConfig, litellm_llm, profiles
+from harness_evolve import AgentProfile, Optimizer, OptimizerConfig, anchors, litellm_llm, profiles
 from harness_evolve.command import CommandEvaluator
 from harness_evolve.grader import TrajectoryGrader
 
@@ -168,13 +194,17 @@ SAFETY = ["giving a final answer on the last line"]
 # TODO: allowed ranges for numeric settings, or {name: {option: what it does}} as SWITCHES.
 SETTING_BOUNDS = {"max_tokens": (200, 4000)}
 SWITCHES: dict = {}
+# TODO: what counts as a correct result, in words (the critic checks grader gaming against it).
+TASK_CONTRACT = "The last line is 'Answer: <answer>' and the answer is the case's expected answer."
 # How a candidate harness is measured: one run of this command per case and trial.
 COMMAND = [sys.executable, str(HERE / "run_case.py"), "{harness}", "{case}"]
+# How the grader alone is checked against anchors.jsonl before the run trusts it.
+GRADE_COMMAND = [sys.executable, str(HERE / "run_case.py"), "--grade", "{case}", "{output}"]
 
 PROFILE = AgentProfile.build(
     name=HERE.name, harness_root=HERE / "harness", agent_description=AGENT_DESCRIPTION,
     safety_mechanisms=SAFETY, constraints="Edits must help on any task of this kind, not on particular cases.",
-    setting_bounds=SETTING_BOUNDS, switches=SWITCHES, grader=TrajectoryGrader())
+    setting_bounds=SETTING_BOUNDS, switches=SWITCHES, grader=TrajectoryGrader(), task_contract=TASK_CONTRACT)
 
 
 def build(run_dir, budget_usd: float = 2.0, rounds: int = 3) -> Optimizer:
@@ -188,14 +218,16 @@ def build(run_dir, budget_usd: float = 2.0, rounds: int = 3) -> Optimizer:
     cfg = OptimizerConfig(evolve_cases=evolve, guard_cases=[], final_cases=held, final_trials=3,
                           budget_usd=budget_usd, max_rounds=rounds, trials=2, calibration_trials=2,
                           default_case_cost_usd=0.01, cost_band=True, parallel_lanes=4,
-                          case_lanes={c: c for c in ids})
+                          case_lanes={c: c for c in ids},
+                          anchors=anchors.load(HERE / "anchors.jsonl"))
     model = os.environ.get("PROPOSER_MODEL") or os.environ.get("MODEL")
     if not model:
         raise SystemExit("set MODEL (and optionally PROPOSER_MODEL) to a litellm model id")
     prices = os.environ.get("PRICES_PER_MTOK")
     same_model = model == os.environ.get("MODEL")          # PRICES_PER_MTOK is the agent model's price
     llm = litellm_llm(model, prices=tuple(float(x) for x in prices.split(",")) if prices and same_model else None)
-    return Optimizer(run_dir, HERE / "harness", cfg, evaluator=CommandEvaluator(COMMAND, concurrency=4),
+    evaluator = CommandEvaluator(COMMAND, concurrency=4, grade_command=GRADE_COMMAND)
+    return Optimizer(run_dir, HERE / "harness", cfg, evaluator=evaluator,
                      proposer_llm=llm, critic_llm=llm, critic_patterns=[])
 '''
 

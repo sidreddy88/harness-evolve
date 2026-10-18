@@ -18,9 +18,12 @@ harness, one gated edit per round.
               cases, k trials each, and a report against the matched-budget
               rerun baseline (report.py)
 
-Before round 0, an optional smoke stage replays a few cases once and checks
-they produced tool calls, verdicts and costs, so a broken setup costs ~$1,
-not a night.
+Before round 0, optional grader anchors (anchors.py) check that the grader
+labels outputs with known verdicts correctly (a blank answer must fail), and an
+optional smoke stage replays a few cases once and checks they produced tool
+calls, verdicts and costs, so a broken setup costs ~$1, not a night. Round 0
+stops the run if (nearly) every evolve trial passes: nothing to improve, or a
+grader that passes everything.
 
 What makes it a long-running agent rather than a script:
 
@@ -62,7 +65,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from harness_evolve import candidates, critic, evidence, health, profiles, proposer, report
+from harness_evolve import anchors, candidates, critic, evidence, health, profiles, proposer, report
 from harness_evolve.acceptance import (
     AcceptanceConfig,
     CaseResult,
@@ -115,6 +118,13 @@ class OptimizerConfig:
     # Concurrent sub-lanes per lane (only if the shared resource allows it).
     lane_width: int = 1
     smoke_cases: list = field(default_factory=list)  # replayed once before round 0
+    # Grader anchors ({"case", "output", "passed"} dicts, anchors.py): graded before anything else;
+    # one mislabelled anchor pauses the run. Needs an evaluator with grade(case_id, output).
+    anchors: list = field(default_factory=list)
+    # Round 0 passing at least this share of evolve trials stops the run (resumably): either nothing
+    # is left to improve or the grader passes everything. None = off: a near-perfect agent, or a
+    # regression gate replaying a golden set through round 0, where ~100% is the expected result.
+    always_pass_tripwire: float | None = 0.98
     final_cases: list = field(default_factory=list)  # held-out; empty = no final phase
     final_trials: int = 3
     health_every: int = 10             # finished cases between tripwire checks
@@ -215,7 +225,7 @@ class Optimizer:
             shutil.rmtree(self.run.original_dir)
         shutil.copytree(self.base, self.run.original_dir)
         state = RunState(run_id=self.run.root.name, config=self.cfg.to_json(),
-                         phase="smoke" if self.cfg.smoke_cases else "evaluate")
+                         phase="anchors" if self.cfg.anchors else self._first_phase())
         self.run.save(state)
         return state
 
@@ -328,8 +338,13 @@ class Optimizer:
         self.run.save(state)
         os._exit(3)
 
+    def _first_phase(self) -> str:
+        return "smoke" if self.cfg.smoke_cases else "evaluate"
+
     async def _step(self, state: RunState, budget: Budget) -> None:
-        if state.phase == "smoke":
+        if state.phase == "anchors":
+            await self._anchors(state, budget)
+        elif state.phase == "smoke":
             await self._smoke(state, budget)
         elif state.phase == "final":
             await self._final(state, budget)
@@ -646,11 +661,37 @@ class Optimizer:
             state.delta_cost = (calibrate_cost_delta(cost_pairs, trials_per_eval=self.cfg.trials)
                                 if len(cost_pairs) >= 2 else None)
         state.S_star = result.S
+        evolve = [v for c in self.cfg.evolve_cases if c in result.per_case for v in result.per_case[c].verdicts]
+        share = sum(v == "PASS" for v in evolve) / len(evolve) if evolve else 0.0
+        if self.cfg.always_pass_tripwire is not None and len(evolve) >= 10 and share >= self.cfg.always_pass_tripwire:
+            state.health["always_pass"] = {"time": _now(), "pass_share": round(share, 3), "trials": len(evolve)}
+            raise health.Tripwire(
+                f"round 0 passed {share:.0%} of {len(evolve)} evolve trials: nothing to improve, or the grader "
+                "passes everything. Check it (anchors with wrong outputs, a few transcripts by hand); if the "
+                "agent really is that good, use harder cases or set always_pass_tripwire=None, then resume")
         state.incumbent_eval = json.dumps(self._eval_ref(self.run.incumbent_dir, k))
         logger.info("round 0: S=%.3f C=$%.3f delta=%.3f", result.S, result.C, state.delta)
         state.round, state.phase = 1, "propose"
         if self.cfg.max_rounds < 1:          # baseline only: measure, propose nothing
             state.phase, state.stop_reason = "done", "round 0 only (baseline and calibration)"
+
+    async def _anchors(self, state: RunState, budget: Budget) -> None:
+        """Grade outputs with known verdicts before any agent run. A grader that gets one wrong
+        (or passes a blank answer) pauses the run: every later measurement would rest on it."""
+        bad = anchors.problems(self.cfg.anchors)
+        if not bad and not callable(getattr(self.evaluator, "grade", None)):
+            bad = ["anchors are set but the evaluator can't grade an output on its own: give "
+                   "CommandEvaluator a grade_command, or add grade(case_id, output) to your evaluator"]
+        cost = 0.0
+        if not bad:
+            bad, cost = await anchors.run(self.evaluator, self.cfg.anchors)
+            budget.record(cost)
+        state.health["anchors"] = {"time": _now(), "anchors": len(self.cfg.anchors),
+                                   "cost_usd": round(cost, 4), "problems": bad}
+        if bad:
+            raise health.Tripwire("grader anchors: " + "; ".join(bad[:5])
+                                  + (f" (+{len(bad) - 5} more)" if len(bad) > 5 else ""))
+        state.phase = self._first_phase()
 
     async def _smoke(self, state: RunState, budget: Budget) -> None:
         """A few cases, one trial each, before any real spend: every replay must

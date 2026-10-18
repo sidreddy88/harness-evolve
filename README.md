@@ -52,6 +52,7 @@ pip install "harness-evolve[litellm]"        # the library and the harness-evolv
 git clone https://github.com/sidreddy88/harness-evolve && cd harness-evolve   # for the example
 python examples/math_agent/fetch_data.py      # downloads 80 problems
 export TOGETHER_API_KEY=...                   # or any litellm provider; set MODEL to match
+harness-evolve check examples/math_agent/config.py --budget 2   # free: no model calls
 harness-evolve run examples/math_agent/config.py --run-dir runs/math-1 --budget 2
 harness-evolve status runs/math-1
 harness-evolve diff runs/math-1               # accepted edits, as diffs to review
@@ -90,6 +91,15 @@ candidate's content hash; a hard budget is checked before each case; provider fa
 rate limits) stop the run instead of being scored as failures; tripwires pause it when measurements
 look broken; a watchdog exits cleanly if it stops making progress.
 
+The grader is checked too, because a grader that passes everything makes every result look like
+progress. Before anything else, optional anchors (`anchors.jsonl`: outputs with known verdicts, plus a
+blank output per case that must fail) are graded, and one wrong label pauses the run. Round 0 stops the
+run if nearly every evolve trial passes (`always_pass_tripwire`, 98%): nothing to improve, or a grader
+that can't fail. An optional `task_contract` in the profile tells the critic what counts as correct, so
+it can judge grader gaming against it. Source: arXiv
+[2610.11464](https://arxiv.org/abs/2610.11464), where a grader evolved without anchors collapsed into
+always-pass while the agent still appeared to improve.
+
 ## Using it on your agent
 
 The quickest start is a generated project:
@@ -109,8 +119,20 @@ following `my-agent/README.md`:
 3. `cases.jsonl`: real tasks, 30+ (50+ to also keep a held-out set).
 4. `config.py`: a description of your agent, what an edit must never weaken, setting bounds.
 
-Then `harness-evolve run config.py --run-dir runs/r1 --budget 2`. The config refuses to run until the
-agent is described.
+Then `harness-evolve check config.py --budget 2`, then `harness-evolve run config.py --run-dir runs/r1
+--budget 2`. The config refuses to run until the agent is described.
+
+`check` builds the optimizer from your config and reads it without calling a model or running the agent,
+so it is free; it exits 1 on a FAIL (`--strict`: on a WARN too), so CI can run it before a scheduled run.
+It checks that the starting harness passes the validation every candidate must pass and that every
+numeric setting is bounded; that held-out cases don't overlap the evolve and guard cases; the smallest
+gain your case and trial counts can accept; whether the budget finishes round 0 and how many rounds it
+covers; that the proposer and critic models have prices; that grader anchors, the always-pass tripwire
+and a task contract are set, and the evaluator can grade the anchors; and that the tripwire baselines
+and the smoke stage are set. Each is a mistake one of our runs paid for, or one the grader-safety work
+guards against. What only a real run shows (a grader mislabelling an anchor, a tool failing on every
+call, $0 replays) is for the run's first phases: anchors, the smoke stage (`smoke_cases`, ~$1), then
+round 0.
 
 The rest of this section is what that project contains, if you'd rather wire it up yourself.
 You need five things.

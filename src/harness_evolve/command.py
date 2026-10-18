@@ -21,12 +21,17 @@ object as the LAST line of its stdout:
 
 A non-zero exit, a timeout or unreadable output scores the trial as an error (it counts as a failure,
 and is shown to the proposer with the end of stderr), not as a provider failure.
+
+`grade_command` (optional) grades a given output without running the agent, for grader anchors
+(anchors.py): placeholders {case} and {output} (a file holding the output text); it prints one JSON
+object as the last line, {"passed": bool, "cost_usd": float (optional, e.g. an LLM judge's cost)}.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -37,12 +42,16 @@ from harness_evolve.evidence import HIDDEN_MARKER
 
 class CommandEvaluator:
     def __init__(self, command: Sequence[str], concurrency: int = 4, timeout_s: float = 600.0,
-                 cwd: str | Path | None = None, env: dict | None = None):
+                 cwd: str | Path | None = None, env: dict | None = None,
+                 grade_command: Sequence[str] | None = None):
         if isinstance(command, str):
             raise TypeError("command must be a list of arguments, e.g. "
                             "['python', 'run_case.py', '{harness}', '{case}']")
         self.command, self.timeout_s = list(command), timeout_s
         self.cwd, self.env = cwd, env
+        self.grade_command = list(grade_command) if grade_command else None
+        if self.grade_command is None:
+            self.grade = None                    # anchors.py: this evaluator can't grade an output alone
         self.gate = asyncio.Semaphore(concurrency)
 
     async def _trial(self, harness_dir: Path, case: str, trial: int) -> dict:
@@ -78,6 +87,33 @@ class CommandEvaluator:
         return {**base, "verdict": "PASS" if passed else "FAIL", "detail": detail.strip(),
                 "steps": list(res.get("steps") or []), "turns": res.get("turns"),
                 "submitted": bool(res.get("submitted", passed)), "cost": {"cost_usd": float(res["cost_usd"])}}
+
+    async def grade(self, case_id: str, output: str) -> dict:
+        """Grade `output` for `case_id` with grade_command, without running the agent."""
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write(output)
+        try:
+            argv = [a.format(case=case_id, output=f.name) for a in self.grade_command]
+            proc = await asyncio.create_subprocess_exec(*argv, cwd=self.cwd, env={**os.environ, **(self.env or {})},
+                                                        stdout=asyncio.subprocess.PIPE,
+                                                        stderr=asyncio.subprocess.PIPE)
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), self.timeout_s)
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return {"error": f"no result after {self.timeout_s:g}s"}
+        finally:
+            os.unlink(f.name)
+        lines = [x for x in out.decode(errors="replace").splitlines() if x.strip()]
+        try:
+            res = json.loads(lines[-1])
+            if not isinstance(res, dict) or "passed" not in res:
+                raise ValueError("needs passed")
+        except (IndexError, ValueError) as exc:
+            why = f"exit {proc.returncode}" if proc.returncode else f"unreadable result ({exc})"
+            return {"error": f"{why}: {err.decode(errors='replace').strip()[-300:]}"}
+        return res
 
     async def evaluate(self, harness_dir: Path, case_ids: list[str], trials: int) -> EvalOutcome:
         trajs = await asyncio.gather(*(self._trial(harness_dir, c, t + 1)

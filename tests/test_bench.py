@@ -35,8 +35,8 @@ def bench_spec(tmp_path, monkeypatch):
         i = int(task.split("What is ")[1].split(" +")[0])
         if "nearest hundred" in task and messages[-1]["role"] == "tool":   # the harmful edit: round
             return _resp([("submit_answer", {"answer": round(2 * i, -2)})])
-        if messages[-1]["role"] == "tool":                   # second turn: submit
-            return _resp([("submit_answer", {"answer": 2 * i})])
+        if messages[-1]["role"] == "tool":                   # second turn: submit (wrong on 1 in 10, so the
+            return _resp([("submit_answer", {"answer": 2 * i + (i % 10 == 9)})])   # good harness isn't 100%)
         return _resp([("calculator", {"expression": f"{i}"}),           # first turn: two calculator calls
                       ("calculator", {"expression": f"{i}+{i}"})])
 

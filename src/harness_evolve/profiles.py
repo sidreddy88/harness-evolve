@@ -100,7 +100,7 @@ degenerate, or self-destructive.
 
 THE AGENT: {agent_description} The harness you are reviewing is its prompt text,
 tool descriptions and settings.
-{context}
+{context}{contract}
 REJECT if ANY of:
 
 1. LEAKAGE / TASK-SPECIALIZATION: the diff encodes knowledge of specific evaluation
@@ -145,6 +145,7 @@ class AgentProfile:
     health_baseline: dict = field(default_factory=dict)
     component_families: dict = field(default_factory=dict)   # component -> family, for the exploration rule
     switches: dict = field(default_factory=dict)   # setting -> {option: what it does}
+    task_contract: str = ""                        # what counts as correct; the critic checks gaming against it
 
     @classmethod
     def build(cls, name: str, harness_root: str | Path, agent_description: str,
@@ -154,7 +155,8 @@ class AgentProfile:
               component_files: dict[str, Callable[[str], bool]] | None = None,
               component_families: dict | None = None, grader: object | None = None,
               health_baseline: dict | None = None,
-              switches: dict[str, dict[str, str]] | None = None) -> AgentProfile:
+              switches: dict[str, dict[str, str]] | None = None,
+              task_contract: str = "") -> AgentProfile:
         """A profile with the proposer and critic instructions written for your agent.
 
         agent_description: what the agent does, its tools, how it finishes a task.
@@ -162,6 +164,9 @@ class AgentProfile:
         constraints: extra rules for the proposer (e.g. "edits must also help on X").
         production_context: how evaluation differs from production, for the critic.
         gaming_examples: what gaming your grader would look like, for the critic.
+        task_contract: what counts as a correct result, independent of how the grader checks it (e.g.
+            "the final number equals the problem's answer"). The critic judges grader gaming against it:
+            in arXiv 2610.11464 an outer judge missed rubric gaming until it was given the task contract.
         setting_bounds: {setting: (lo, hi)} for numbers, or frozenset({...}) of allowed values.
         switches: {setting: {option: what the agent does with it}} for structural settings (e.g.
             {"plan": {"off": "solves directly", "on": "writes a plan first, one extra model call"}}).
@@ -181,12 +186,15 @@ class AgentProfile:
         critic = CRITIC_TEMPLATE.format(
             agent_description=agent_description.strip(), safety=safety,
             context=("\n" + production_context.strip() + "\n") if production_context else "",
+            contract=(f"\nWHAT COUNTS AS CORRECT (the task contract): {task_contract.strip()}\nFor rule 3, "
+                      "an edit that aims at what the grader accepts rather than at this contract is gaming.\n"
+                      if task_contract.strip() else ""),
             gaming=(" " + gaming_examples.strip()) if gaming_examples else "")
         return cls(name=name, harness_root=Path(harness_root), setting_bounds=bounds,
                    components=components, component_files=dict(files), proposer_system=proposer,
                    critic_system=critic, grader=grader, health_baseline=dict(health_baseline or {}),
                    component_families=dict(component_families or {c: c for c in components}),
-                   switches=switches)
+                   switches=switches, task_contract=task_contract.strip())
 
 
 _active: AgentProfile | None = None

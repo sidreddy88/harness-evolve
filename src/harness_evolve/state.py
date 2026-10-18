@@ -32,7 +32,8 @@ from pathlib import Path
 
 # Where a round is in its life. A resume restarts the current phase from its
 # beginning; every phase is idempotent given the cached evals and files.
-PHASES = ("smoke", "evaluate", "propose", "screen", "decide", "confirm", "transfer", "prune", "final", "done")
+PHASES = ("anchors", "smoke", "evaluate", "propose", "screen", "decide", "confirm", "transfer", "prune", "final",
+          "done")
 
 
 @dataclass
