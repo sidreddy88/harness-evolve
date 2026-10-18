@@ -198,6 +198,23 @@ asyncio.run(opt.run_until_stopped())
 Or put a `build(run_dir, budget_usd, rounds)` function in a config file and use the CLI, as the
 example does.
 
+## Watching and steering runs in a browser
+
+```bash
+pip install "harness-evolve[serve]"
+harness-evolve serve runs          # http://127.0.0.1:8765, also a REST API under /api (docs at /api/docs)
+```
+
+Every run under `runs/` (bench scenarios included): status, spend, the noise band, each round's decision
+and reason, diffs, the held-out report and tripwire pauses. From the same pages you can approve or reject a
+proposal (recorded in `proposals/rN/review.json`; applying it stays with your normal review), run `check`
+on a config, and start or resume a run. Runs start as their own processes, so they keep going if the server
+stops, and log to `RUN_DIR/serve.log`. The run directories are the only storage.
+
+Starting a run executes its config, so the server binds to 127.0.0.1 and only accepts requests addressed
+to localhost. To serve it anywhere else, set `HE_SERVE_TOKEN` (sent as `Authorization: Bearer ...`, or
+open `/login?token=...` once in a browser); without one it refuses to start.
+
 ## Benchmarking the optimizer
 
 `harness-evolve bench` measures the optimizer itself, so a change to its method is judged by
