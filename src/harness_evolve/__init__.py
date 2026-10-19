@@ -17,4 +17,4 @@ from harness_evolve.profiles import AgentProfile
 __all__ = ["AgentProfile", "CaseResult", "EvalOutcome", "EvalResult", "Evaluator", "Harness", "LLMReply",
            "LocalPublisher", "Optimizer", "OptimizerConfig", "ProviderFailure", "UnpricedModel",
            "litellm_llm", "load_harness"]
-__version__ = "0.2.0"
+__version__ = "0.3.0"
