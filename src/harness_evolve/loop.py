@@ -65,7 +65,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from harness_evolve import anchors, candidates, critic, evidence, health, profiles, proposer, report
+from harness_evolve import anchors, candidates, critic, evidence, health, profiles, proposer, report, rows
 from harness_evolve.acceptance import (
     AcceptanceConfig,
     CaseResult,
@@ -731,6 +731,8 @@ class Optimizer:
                 "spent_usd": round(state.spent_usd, 2)}
         rep_ = report.build(orig.per_case, evolved.per_case if evolved else None, k, meta)
         report.write(self.run.root / "report", rep_)
+        # The same trials as agentstats rows, for its comparisons and CI gates (rows.py).
+        rows.write(self.run.root / "report" / "agentstats", rows.final_rows(self.run, cases, k))
         state.phase = "done"
         state.stop_reason = f"{state.rounds_stop_reason}; held-out report written ({rep_['verdict'][:160]})"
 

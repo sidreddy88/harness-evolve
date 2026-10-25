@@ -591,6 +591,11 @@ def test_final_phase_writes_heldout_report_against_rerun_baseline(tmp_path):
     assert set(rep["comparisons"]) == {"vs_original_single_run", "vs_rerun_baseline_best_of_2"}
     heldout = [c for _, c in ev_.calls if c.startswith("h")]
     assert sorted(heldout) == ["h1", "h1", "h2", "h2"]     # original and evolved, once each
+    rows_dir = tmp_path / "run" / "report" / "agentstats"   # the same trials as agentstats rows
+    for arm in ("original", "evolved"):
+        rows = [json.loads(line) for line in (rows_dir / f"{arm}.jsonl").read_text().splitlines()]
+        assert len(rows) == 6 and {r["arm"] for r in rows} == {arm}          # 2 cases x 3 trials
+        assert sorted({r["run"] for r in rows}) == [1, 2, 3]
 
 
 def test_final_phase_without_an_acceptance_runs_the_original_once(tmp_path):
@@ -605,6 +610,8 @@ def test_final_phase_without_an_acceptance_runs_the_original_once(tmp_path):
     assert [c for _, c in ev_.calls if c.startswith("h")] == ["h1"]
     rep = json.loads((tmp_path / "run" / "report" / "report.json").read_text())
     assert rep["evolved"] is None and "No edit was accepted" in rep["verdict"]
+    rows_dir = tmp_path / "run" / "report" / "agentstats"
+    assert sorted(p.name for p in rows_dir.iterdir()) == ["original.jsonl"]
 
 
 def test_lane_width_runs_cases_of_one_repo_concurrently_under_the_global_cap(tmp_path):

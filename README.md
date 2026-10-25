@@ -87,6 +87,20 @@ final     original vs evolved on held-out cases, k trials each, including the
 Accepted edits are written as diffs under `runs/<id>/proposals/` for you to review; your code is never
 changed automatically.
 
+The held-out report is in `runs/<id>/report/`. The same held-out trials are also written as one JSON line
+per trial (`report/agentstats/original.jsonl`, and `evolved.jsonl` when an edit was accepted), in the
+row format of the agentstats statistics package, so you can run your own comparisons or a CI gate on
+them:
+
+```json
+{"arm": "evolved", "run": 1, "case": "pydata__xarray-2905", "passed": true, "infra_error": null,
+ "cost_usd": 0.0106, "tags": [], "steps": 13}
+```
+
+`run` is the trial number, `steps` the number of steps, and `infra_error` is always null (a provider
+failure stops the run instead of being scored). For a run that finished before this existed:
+`harness-evolve export runs/<id>`.
+
 Built for long unattended runs: every phase is checkpointed; every case's result is cached by the
 candidate's content hash; a hard budget is checked before each case; provider failures (billing, auth,
 rate limits) stop the run instead of being scored as failures; tripwires pause it when measurements
