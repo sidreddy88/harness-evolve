@@ -91,6 +91,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("run_dir", type=Path)
     d = sub.add_parser("diff", help="show accepted edits")
     d.add_argument("run_dir", type=Path)
+    e = sub.add_parser("export", help="write a run's held-out trials as agentstats rows (JSONL)")
+    e.add_argument("run_dir", type=Path)
+    e.add_argument("--out", type=Path, help="output directory (default: RUN_DIR/report/agentstats)")
     b = sub.add_parser("bench", help="benchmark the optimizer: known-answer and open scenarios")
     b.add_argument("spec", type=Path)
     b.add_argument("--out", type=Path, required=True)
@@ -118,6 +121,17 @@ def main(argv: list[str] | None = None) -> int:
             print("no accepted edits")
         for f in found:
             print(f"### {f.parent.name}\n{f.read_text()}")
+        return 0
+
+    if args.cmd == "export":
+        from harness_evolve import rows
+        try:
+            paths = rows.export(args.run_dir, args.out)
+        except (FileNotFoundError, ValueError) as exc:
+            print(exc)
+            return 1
+        for p in paths:
+            print(f"wrote {p} ({sum(1 for _ in p.open())} rows)")
         return 0
 
     if args.cmd == "bench":

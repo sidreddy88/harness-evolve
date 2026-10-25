@@ -95,5 +95,8 @@ def write(out_dir: Path, report: dict) -> None:
         p = report["paired"]
         lines.append(f"\nPer case: {len(p['improved'])} improved, {len(p['regressed'])} regressed, "
                      f"{p['unchanged']} unchanged.")
+    lines.append("\nThe held-out trials are also in `agentstats/`, one row per trial: "
+                 "`agentstats compare --a agentstats/original.jsonl --b agentstats/evolved.jsonl` "
+                 "(evolved.jsonl only when an edit was accepted).")
     lines.append("\n```\n" + json.dumps(report["meta"], indent=1) + "\n```\n")
     (out_dir / "report.md").write_text("\n".join(lines))
