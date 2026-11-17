@@ -83,6 +83,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--run-dir", type=Path, required=True)
     r.add_argument("--budget", type=float, help="hard cap in USD")
     r.add_argument("--rounds", type=int, help="maximum rounds")
+    r.add_argument("--prior-history", type=Path, action="append", default=[], metavar="PATH",
+                   help="an earlier run's directory or history.jsonl, shown to the proposer first (repeatable; "
+                        "read when the run starts, ignored on resume)")
     v = sub.add_parser("serve", help="web app and REST API over run directories")
     v.add_argument("runs_dir", type=Path, nargs="?", default=Path("runs"))
     v.add_argument("--host", default="127.0.0.1")
@@ -156,6 +159,8 @@ def main(argv: list[str] | None = None) -> int:
         print(check.render(findings))
         return check.exit_code(findings, args.strict)
     opt = mod.build(args.run_dir, **kwargs)
+    if getattr(args, "prior_history", None):
+        opt.cfg.prior_history = [str(p) for p in args.prior_history]
     try:
         asyncio.run(opt.run_until_stopped())
     except KeyboardInterrupt:

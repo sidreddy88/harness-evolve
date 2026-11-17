@@ -77,7 +77,7 @@ from harness_evolve.acceptance import (
 )
 from harness_evolve.budget import Budget, BudgetExceeded, estimate_eval_cost
 from harness_evolve.evaluator import Evaluator, ProviderFailure, UnpricedModel
-from harness_evolve.history import EditHistory, HistoryEntry
+from harness_evolve.history import EditHistory, HistoryEntry, prior_summary, snapshot_prior
 from harness_evolve.llm import reply_cost
 from harness_evolve.state import RunDir, RunState
 
@@ -158,6 +158,9 @@ class OptimizerConfig:
     # band, cost within the cost band, no guard case broken). Edits whose files a later
     # accepted edit also changed are kept untested: they can't be removed on their own.
     prune: bool = False
+    # Earlier runs' history.jsonl files (or their run directories): snapshotted into this run at start and
+    # shown to the proposer before this run's own history, so it doesn't rediscover rejected ideas.
+    prior_history: list = field(default_factory=list)
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -214,6 +217,7 @@ class Optimizer:
         self.publisher = publisher or LocalPublisher()
         self.transfer_evaluator = transfer_evaluator
         self.history = EditHistory(self.run.root / "history.jsonl")
+        self.prior_path = self.run.root / "prior_history.jsonl"
         self._key_tag = ""        # "c" while confirming: fresh trials, cached separately
 
     # ---- lifecycle ----------------------------------------------------------
@@ -226,6 +230,8 @@ class Optimizer:
         if self.run.original_dir.exists():
             shutil.rmtree(self.run.original_dir)
         shutil.copytree(self.base, self.run.original_dir)
+        if self.cfg.prior_history:
+            snapshot_prior(self.cfg.prior_history, self.prior_path)
         state = RunState(run_id=self.run.root.name, config=self.cfg.to_json(),
                          phase="anchors" if self.cfg.anchors else self._first_phase())
         self.run.save(state)
@@ -746,7 +752,7 @@ class Optimizer:
         try:
             options = await proposer.propose_all(
                 self.run.incumbent_dir, evidence.build(inc_result, inc_traj),
-                self.history.summary(),
+                "\n\n".join(x for x in (prior_summary(self.prior_path), self.history.summary()) if x),
                 lambda sys_, prompt: self._llm_call(self.proposer_llm, budget, state, sys_, prompt),
                 cand.get("feedback", ""), allowed, self._run_context(state))
             prop, files = self._first_valid(options, cand_dir)

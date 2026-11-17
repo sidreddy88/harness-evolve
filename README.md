@@ -137,6 +137,14 @@ following `my-agent/README.md`:
 Then `harness-evolve check config.py --budget 2`, then `harness-evolve run config.py --run-dir runs/r1
 --budget 2`. The config refuses to run until the agent is described.
 
+To start a run from what earlier runs tried, add `--prior-history runs/r1` (repeatable; a run directory or
+its `history.jsonl`), or set `prior_history` in the config. Those entries are copied into the new run at
+start (`prior_history.jsonl`) and shown to the proposer, one line each with outcome and the cases that
+moved, before the run's own history. Diffs are left out, since they were made against other harnesses. The
+idea comes from [Self-Improvement Memory](https://arxiv.org/abs/2611.18856), where carrying the optimizer's
+record into a continued run beat starting it fresh; that's mostly single runs per condition there, and
+untested here yet.
+
 `check` builds the optimizer from your config and reads it without calling a model or running the agent,
 so it is free; it exits 1 on a FAIL (`--strict`: on a WARN too), so CI can run it before a scheduled run.
 It checks that the starting harness passes the validation every candidate must pass and that every
