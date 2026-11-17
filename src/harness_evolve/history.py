@@ -89,3 +89,42 @@ class EditHistory:
         if len(text) > max_chars:
             text = "[older history truncated]\n" + text[-(max_chars - 27):]
         return text
+
+
+def snapshot_prior(sources: list[str | Path], out: str | Path) -> int:
+    """Copy earlier runs' history entries (a history.jsonl, or a run directory holding one) into one file,
+    each tagged with the run it came from. Pilot notes are skipped. Taken once at run start, so a resumed run
+    sees the same prior history even if those runs change. Returns the number of entries copied."""
+    rows = []
+    for src in sources:
+        p = Path(src)
+        p = p / "history.jsonl" if p.is_dir() else p
+        if not p.exists():
+            raise FileNotFoundError(f"prior history not found: {p}")
+        for line in p.read_text().splitlines():
+            if line.strip() and not str((e := json.loads(line)).get("outcome", "")).startswith("pilot_"):
+                rows.append({"source_run": p.parent.name, **e})
+    Path(out).write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+    return len(rows)
+
+
+def prior_summary(path: str | Path, max_chars: int = 4000) -> str:
+    """One line per earlier-run candidate for the proposer: what was tried, and how it came out. Diffs are
+    left out: they were made against those runs' harnesses. Newest kept if it doesn't fit."""
+    p = Path(path)
+    if not p.exists() or not p.read_text().strip():
+        return ""
+    lines = []
+    for line in p.read_text().splitlines():
+        e = json.loads(line)
+        meas = f", dS {e['delta_S']:+.3f}" if e.get("delta_S") is not None else ""
+        moved = (f"; improved {e['improved']}" if e.get("improved") else "") + \
+                (f"; regressed {e['regressed']}" if e.get("regressed") else "")
+        lines.append(f"  {e.get('source_run')} r{e.get('round')} [{e.get('component')}] {e.get('outcome')}"
+                     f"{meas}: {(e.get('hypothesis') or '')[:200]}{moved}")
+    head = ("Candidates from earlier runs (possibly a different starting harness or model; measured against "
+            "their own incumbents). Don't repeat a rejected idea without a reason it would differ now:")
+    body = "\n".join(lines)
+    if len(head) + len(body) + 1 > max_chars:
+        body = "  [older entries truncated]\n" + body[-(max_chars - len(head) - 30):]
+    return head + "\n" + body

@@ -810,3 +810,31 @@ def test_noise_band_has_a_floor_when_no_pair_disagrees():
     assert d == pytest.approx(2 * 3 ** 0.5 / 100 / 2 ** 0.5)          # ~0.0245, as if 3 cases had flipped
     many = {f"c{i}": (i % 2 == 0, i % 3 == 0) for i in range(100)}  # plenty of flips: floor doesn't bind
     assert calibrate_delta(many) == calibrate_delta(many, min_flips=0)
+
+
+def test_prior_history_is_snapshotted_and_shown_to_the_proposer_first(tmp_path):
+    old = EditHistory(tmp_path / "r5" / "history.jsonl")
+    old.append(HistoryEntry(0, "p0", "settings", "pilot note", "", "pilot_seed", ""))
+    old.append(HistoryEntry(1, "r1", "task_prompt", "ask for a stack trace first", "+x", "rejected",
+                            "in band", 0.01, 0.0, ["c2"], ["c3"]))
+    prompts = []
+
+    async def llm(system, prompt):
+        prompts.append(prompt)
+        return await terse_proposer()(system, prompt)
+
+    opt = _opt(tmp_path, FakeEvaluator(), proposer_llm=llm, max_rounds=1,
+               prior_history=[str(tmp_path / "r5")])
+    asyncio.run(opt.run_until_stopped())
+    snap = (tmp_path / "run" / "prior_history.jsonl").read_text()
+    assert "pilot note" not in snap and '"source_run": "r5"' in snap
+    hist = prompts[0].split("=== EDIT HISTORY ===")[1]
+    assert "r5 r1 [task_prompt] rejected, dS +0.010: ask for a stack trace first; improved ['c2']" in hist
+    assert hist.index("earlier runs") < hist.index("No candidates judged yet")
+    old.append(HistoryEntry(2, "r2", "settings", "added after start", "", "rejected", ""))
+    assert "added after start" not in (tmp_path / "run" / "prior_history.jsonl").read_text()
+
+
+def test_prior_history_must_exist(tmp_path):
+    with pytest.raises(FileNotFoundError, match="prior history not found"):
+        asyncio.run(_opt(tmp_path, FakeEvaluator(), prior_history=[str(tmp_path / "nope")]).run_until_stopped())
